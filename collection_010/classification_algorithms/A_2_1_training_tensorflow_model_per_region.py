@@ -61,9 +61,22 @@ from IPython.display import display, HTML, clear_output
 # 🌍 GLOBAL VARIABLES AND DIRECTORY SETUP
 # ====================================
 
+def _norm_subfolder(sf: str) -> str:
+    sf = (sf or "").strip().strip("/")
+    return sf  # no trailing slash here (we add it where needed)
+
+_BASE_SF = _norm_subfolder(BASE_SUBFOLDER)
+
+def _local_country_base(country: str) -> str:
+    # /content/mapbiomas-fire/sudamerica/{country}[/subfolder]
+    return f"/content/mapbiomas-fire/sudamerica/{country}" + (f"/{_BASE_SF}" if _BASE_SF else "")
+
+def _gcs_country_base(bucket: str, country: str) -> str:
+    # gs://{bucket}/sudamerica/{country}/[subfolder/]
+    return f"gs://{bucket}/sudamerica/{country}/" + (f"{_BASE_SF}/" if _BASE_SF else "")
 
 # Definir diretórios para o armazenamento de dados e saída do modelo
-folder = f'/content/mapbiomas-fire/sudamerica/{country}/b24'  # Diretório principal onde os dados são armazenados
+folder = _local_country_base(country)  # local base folder (root or subfolder)
 
 folder_samples = f'{folder}/training_samples'  # Diretório para armazenamento de dados de amostra
 folder_model = f'{folder}/models_col1'  # Diretório para armazenamento da saída dos modelos
@@ -201,7 +214,7 @@ class ModelTrainer:
                 json.dump(hyperparameters, json_file)
             log_message(f'[INFO] Hyperparameters saved to: {json_path}')
 
-            bucket_model_path = f'gs://{self.bucket_name}/sudamerica/{self.country}/models_col1/'
+            bucket_model_path = f"{_gcs_country_base(self.bucket_name, self.country)}models_col1/"
             try:
                 subprocess.check_call(f'gsutil cp {model_path}.* {json_path} {bucket_model_path}', shell=True)
                 log_message(f'[INFO] Model uploaded to GCS at: {bucket_model_path}')
@@ -254,7 +267,10 @@ class FileManager:
 
     def download_image(self, image):
         self.log_message(f"[INFO] Starting download of: {image}")
-        download_command = f'gsutil -m cp gs://{self.bucket_name}/sudamerica/{self.country}/training_samples/{image} {self.folder_samples}/'
+        download_command = (
+            f"gsutil -m cp {_gcs_country_base(self.bucket_name, self.country)}training_samples/{image} "
+            f"{self.folder_samples}/"
+        )
         process = subprocess.Popen(download_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         process.wait()
 
