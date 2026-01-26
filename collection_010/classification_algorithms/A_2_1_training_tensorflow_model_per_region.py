@@ -63,7 +63,7 @@ from IPython.display import display, HTML, clear_output
 
 
 # Definir diretórios para o armazenamento de dados e saída do modelo
-folder = f'/content/mapbiomas-fire/sudamerica/{country}'  # Diretório principal onde os dados são armazenados
+folder = f'/content/mapbiomas-fire/sudamerica/{country}/b24'  # Diretório principal onde os dados são armazenados
 
 folder_samples = f'{folder}/training_samples'  # Diretório para armazenamento de dados de amostra
 folder_model = f'{folder}/models_col1'  # Diretório para armazenamento da saída dos modelos
