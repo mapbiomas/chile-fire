@@ -22,7 +22,7 @@ tf.disable_v2_behavior()
 # ====================================
 
 bucket_name = 'mapbiomas-fire'
-base_path = 'mapbiomas-fire/sudamerica/b24'
+base_path = 'mapbiomas-fire/sudamerica/b24/'
 
 # Initialize Google Cloud Storage file system
 fs = gcsfs.GCSFileSystem(project=bucket_name)
