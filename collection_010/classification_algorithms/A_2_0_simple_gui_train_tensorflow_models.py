@@ -48,7 +48,7 @@ class TrainingInterface:
         """
         List files in 'training_samples' folder for the selected country.
         """
-        path = f"{base_path}{self.country}/training_samples/"
+        path = f"{_country_base(self.country)}training_samples/"
         try:
             return [file.split('/')[-1] for file in fs.ls(path) if file.split('/')[-1]]
         except FileNotFoundError:
@@ -106,7 +106,7 @@ class TrainingInterface:
         """
         Return a set of model checkpoint base names (excluding hyperparameters).
         """
-        prefix_path = f"{base_path}{self.country}/models_col1/"
+        prefix_path = f"{_country_base(self.country)}models_col1/"
         try:
             files = fs.ls(prefix_path)
             model_files = [
@@ -185,7 +185,10 @@ class TrainingInterface:
         self.training_files = self.list_training_samples_folder()
         num_files = len(self.training_files)
 
-        header = widgets.HTML(value=f"<b>Selected country: {self.country} ({num_files} files found)</b>")
+        header = widgets.HTML(
+            value=f"<b>Selected country: {self.country} ({num_files} files found)</b>"
+                  f"<br><b>Base subfolder:</b> <code>{BASE_SUBFOLDER or '(root)'}</code>"
+        )
         display(header)
 
         files_panel = widgets.Output(layout={'border': '1px solid black', 'height': '150px', 'overflow_y': 'scroll', 'margin': '10px 0'})
