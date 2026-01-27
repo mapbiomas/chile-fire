@@ -237,7 +237,19 @@ class ImageProcessor:
             dataset = self.load_image(image_path)
             data = self.convert_to_array(dataset)
             vector = data.reshape(data.shape[0] * data.shape[1], data.shape[2])
-            cleaned = vector[~np.isnan(vector).any(axis=1)]
+            # Mantém pixel se PELO MENOS uma banda for válida
+            cleaned = vector[~np.isnan(vector).all(axis=1)]
+            
+            if cleaned.shape[0] == 0:
+                self.log_message(
+                    f"[WARNING] Image {image_path} resulted in 0 valid pixels "
+                    f"(all bands NaN for all pixels)."
+                )
+            else:
+                self.log_message(
+                    f"[INFO] Image {image_path}: {cleaned.shape[0]}/{vector.shape[0]} valid pixels"
+                )
+            
             return cleaned
         except Exception as e:
             self.log_message(f"[ERROR] Falha ao processar a imagem {image_path}: {str(e)}")
@@ -361,6 +373,10 @@ def sample_download_and_preparation(images_train_test):
     log_message(f"[INFO] Concatenated data: {data_train_test_vector.shape}")
     
     valid_data_train_test = filter_valid_data_and_shuffle(data_train_test_vector)
+    if valid_data_train_test.shape[0] == 0:
+      log_message("[ERROR] No valid training samples after filtering. Training aborted.")
+      log_message("[ERROR] Check sample generation and band masks.")
+      return
     log_message(f"[INFO] Valid data after filtering: {valid_data_train_test.shape}")
     
     trainer = ModelTrainer(bucket_name, country, folder_model, interface.get_active_checkbox)
