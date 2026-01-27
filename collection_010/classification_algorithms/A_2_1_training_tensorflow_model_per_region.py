@@ -1,4 +1,4 @@
-# last_update: '2026/01/26', github:'mapbiomas/chile-fire', source: 'IPAM', contact: 'contato@mapbiomas.org'
+# last_update: '2026/01/27', github:'mapbiomas/chile-fire', source: 'IPAM', contact: 'contato@mapbiomas.org'
 # MapBiomas Fire Classification Algorithms Step A_2_1_training_tensorflow_model_per_region.py
 ### Step A_2_1 - Functions for training TensorFlow models per region
 
@@ -193,8 +193,16 @@ class ModelTrainer:
                 'NUM_N_L4': NUM_N_L4,
                 'NUM_N_L5': NUM_N_L5,
                 'NUM_CLASSES': NUM_CLASSES,
-                'NUM_INPUT': NUM_INPUT
+                'NUM_INPUT': NUM_INPUT,
+                'DATASET_SCHEMA': {
+                    'INPUT_BAND_INDICES': bi,
+                    'LABEL_BAND_INDEX': li,
+                    'LABEL_NAME': 'landcover'
+                }
             }
+
+
+
 
             with open(json_path, 'w') as json_file:
                 json.dump(hyperparameters, json_file)
@@ -297,6 +305,46 @@ class FileManager:
 # 🧰 SUPPORT FUNCTIONS (utils)
 # ====================================
 
+def infer_dataset_schema(sample_path, label_name="landcover"):
+    """
+    Infere automaticamente o schema do dataset a partir de um sample raster.
+    Retorna:
+      - input_band_indices
+      - input_band_names
+      - label_band_index
+    """
+    with rasterio.open(sample_path) as src:
+        band_count = src.count
+        band_descriptions = list(src.descriptions)
+
+    # Normaliza nomes (caso venham None)
+    band_names = [
+        name if name is not None else f"band_{i}"
+        for i, name in enumerate(band_descriptions)
+    ]
+
+    if label_name not in band_names:
+        raise ValueError(
+            f"Label band '{label_name}' not found in sample bands: {band_names}"
+        )
+
+    label_band_index = band_names.index(label_name)
+
+    input_band_indices = [
+        i for i in range(band_count) if i != label_band_index
+    ]
+
+    input_band_names = [
+        band_names[i] for i in input_band_indices
+    ]
+
+    return {
+        "NUM_INPUT": len(input_band_indices),
+        "INPUT_BAND_INDICES": input_band_indices,
+        "INPUT_BAND_NAMES": input_band_names,
+        "LABEL_BAND_INDEX": label_band_index,
+        "ALL_BAND_NAMES": band_names
+    }
 
 # Função otimizada para remover NaNs e embaralhar os dados
 def filter_valid_data_and_shuffle(data):
@@ -346,6 +394,23 @@ def sample_download_and_preparation(images_train_test):
 
     log_message(f"[INFO] Starting image download and preparation for {len(images_train_test)} images...")
 
+    # 🔍 Infer dataset schema from the first sample (once)
+    first_sample_name = images_train_test[0]
+    first_sample_path = os.path.join(folder_samples, first_sample_name)
+    
+    # Garante que o primeiro sample exista localmente
+    if not os.path.exists(first_sample_path):
+        success = FileManager(bucket_name, country, folder_samples, fs, log_message).download_image(first_sample_name)
+        if not success:
+            raise RuntimeError("[ERROR] Failed to download first sample for schema inference.")
+    
+    dataset_schema = infer_dataset_schema(
+        first_sample_path,
+        label_name="landcover"
+    )
+    
+    log_message(f"[INFO] Inferred dataset schema: {dataset_schema}")
+    
     with tqdm(total=len(images_train_test), desc="[INFO] Downloading and processing images") as pbar:
         for image in images_train_test:
             local_file = os.path.join(folder_samples, image)
@@ -381,7 +446,11 @@ def sample_download_and_preparation(images_train_test):
     
     trainer = ModelTrainer(bucket_name, country, folder_model, interface.get_active_checkbox)
 
-    trainer.split_and_train(valid_data_train_test, bi=[0, 1, 2, 3], li=4)
+    trainer.split_and_train(
+        valid_data_train_test,
+        bi=dataset_schema["INPUT_BAND_INDICES"],
+        li=dataset_schema["LABEL_BAND_INDEX"]
+    )
 
 # ====================================
 # 🚀 RUNNING THE INTERFACE
