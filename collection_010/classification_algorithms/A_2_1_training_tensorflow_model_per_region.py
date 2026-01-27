@@ -61,27 +61,13 @@ from IPython.display import display, HTML, clear_output
 # 🌍 GLOBAL VARIABLES AND DIRECTORY SETUP
 # ====================================
 
-def _norm_subfolder(sf: str) -> str:
-    sf = (sf or "").strip().strip("/")
-    return sf  # no trailing slash here (we add it where needed)
-
-_BASE_SF = _norm_subfolder(BASE_SUBFOLDER)
-
-def _local_country_base(country: str) -> str:
-    # /content/mapbiomas-fire/sudamerica/{country}[/subfolder]
-    return f"/content/mapbiomas-fire/sudamerica/{country}" + (f"/{_BASE_SF}" if _BASE_SF else "")
-
-def _gcs_country_base(bucket: str, country: str) -> str:
-    # gs://{bucket}/sudamerica/{country}/[subfolder/]
-    return f"gs://{bucket}/sudamerica/{country}/" + (f"{_BASE_SF}/" if _BASE_SF else "")
-
 # Definir diretórios para o armazenamento de dados e saída do modelo
-folder = _local_country_base(country)  # local base folder (root or subfolder)
+LOCAL_BASE_FOLDER = f"/content/{BASE_DATASET_PATH}"
 
-folder_samples = f'{folder}/training_samples'  # Diretório para armazenamento de dados de amostra
-folder_model = f'{folder}/models_col1'  # Diretório para armazenamento da saída dos modelos
-folder_images = f'{folder}/tmp1'  # Diretório para armazenamento temporário de imagens
-folder_mosaic = f'{folder}/mosaics_cog'  # Diretório para arquivos COG (Cloud-Optimized GeoTIFF)
+folder_samples = f'{LOCAL_BASE_FOLDER}/training_samples'
+folder_model   = f'{LOCAL_BASE_FOLDER}/models_col1'
+folder_images  = f'{LOCAL_BASE_FOLDER}/tmp1'
+folder_mosaic  = f'{LOCAL_BASE_FOLDER}/mosaics_cog'
 
 if not os.path.exists(folder_samples):
     os.makedirs(folder_samples)
@@ -214,7 +200,7 @@ class ModelTrainer:
                 json.dump(hyperparameters, json_file)
             log_message(f'[INFO] Hyperparameters saved to: {json_path}')
 
-            bucket_model_path = f"{_gcs_country_base(self.bucket_name, self.country)}models_col1/"
+            bucket_model_path = f'gs://{BASE_DATASET_PATH}/models_col1/'
             try:
                 subprocess.check_call(f'gsutil cp {model_path}.* {json_path} {bucket_model_path}', shell=True)
                 log_message(f'[INFO] Model uploaded to GCS at: {bucket_model_path}')
@@ -267,10 +253,8 @@ class FileManager:
 
     def download_image(self, image):
         self.log_message(f"[INFO] Starting download of: {image}")
-        download_command = (
-            f"gsutil -m cp {_gcs_country_base(self.bucket_name, self.country)}training_samples/{image} "
-            f"{self.folder_samples}/"
-        )
+        download_command = f'gsutil -m cp gs://{BASE_DATASET_PATH}/training_samples/{image} {self.folder_samples}/'
+
         process = subprocess.Popen(download_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         process.wait()
 
@@ -380,6 +364,7 @@ def sample_download_and_preparation(images_train_test):
     log_message(f"[INFO] Valid data after filtering: {valid_data_train_test.shape}")
     
     trainer = ModelTrainer(bucket_name, country, folder_model, interface.get_active_checkbox)
+
     trainer.split_and_train(valid_data_train_test, bi=[0, 1, 2, 3], li=4)
 
 # ====================================
