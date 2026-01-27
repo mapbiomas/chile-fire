@@ -21,8 +21,12 @@ tf.disable_v2_behavior()
 # 🌍 GLOBAL SETTINGS AND FILESYSTEM
 # ====================================
 
+# Espera-se que BASE_DATASET_PATH já esteja definido no notebook
+# Exemplo:
+# mapbiomas-fire/sudamerica/chile
+# mapbiomas-fire/sudamerica/chile/b24
+
 bucket_name = 'mapbiomas-fire'
-base_path = 'mapbiomas-fire/sudamerica/b24/'
 
 # Initialize Google Cloud Storage file system
 fs = gcsfs.GCSFileSystem(project=bucket_name)
@@ -48,7 +52,7 @@ class TrainingInterface:
         """
         List files in 'training_samples' folder for the selected country.
         """
-        path = f"{_country_base(self.country)}training_samples/"
+        path = f"{BASE_DATASET_PATH}/training_samples/"
         try:
             return [file.split('/')[-1] for file in fs.ls(path) if file.split('/')[-1]]
         except FileNotFoundError:
@@ -106,7 +110,7 @@ class TrainingInterface:
         """
         Return a set of model checkpoint base names (excluding hyperparameters).
         """
-        prefix_path = f"{_country_base(self.country)}models_col1/"
+        prefix_path = f"{BASE_DATASET_PATH}/models_col1/"
         try:
             files = fs.ls(prefix_path)
             model_files = [
