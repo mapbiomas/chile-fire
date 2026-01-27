@@ -551,8 +551,10 @@ def process_single_image(dataset_classify, version, region,folder_temp):
 
     # Convert GDAL dataset to a NumPy array
     log_message(f"[INFO] Converting GDAL dataset to NumPy array.")
-    data_classify = convert_to_array(dataset_classify)
-    
+    data_classify = convert_to_array(dataset_classify)    
+    data_classify = data_classify[:, :, :NUM_INPUT]
+
+  
     # Reshape into a single pixel vector
     log_message(f"[INFO] Reshaping data into a single pixel vector.")
     data_classify_vector = reshape_single_vector(data_classify)
@@ -581,7 +583,7 @@ def process_year_by_satellite(satellite_years, bucket_name, folder_mosaic, folde
     grid_landsat = grid.getInfo()['features']
     start_time = time.time()
 
-    collection_name = f'projects/{ee_project}/assets/FIRE/COLLECTION1/CLASSIFICATION/{DATASET_VERSION or "root"}/burned_area_{country}_{version}'
+    collection_name = f'projects/{ee_project}/assets/FIRE/COLLECTION1/CLASSIFICATION/burned_area_{country}_{version}'
     check_or_create_collection(collection_name, ee_project)
 
     for satellite_year in satellite_years[:1 if simulate_test else None]:  # apenas 1 satélite se teste
