@@ -1,4 +1,4 @@
-# last_update: '2025/06/02', github:'mapbiomas/chile-fire', source: 'IPAM', contact: 'contato@mapbiomas.org'
+# last_update: '2026/01/26', github:'mapbiomas/chile-fire', source: 'IPAM', contact: 'contato@mapbiomas.org'
 # MapBiomas Fire Classification Algorithms Step A_3_1_tensorflow_classification_burned_area.py 
 ### Step A_3_1 - Functions for TensorFlow classification of burned areas
 
@@ -535,7 +535,18 @@ def process_single_image(dataset_classify, version, region,folder_temp):
     # Load hyperparameters from the JSON file
     with open(json_path, 'r') as json_file:
         hyperparameters = json.load(json_file)
+        
+    dataset_schema = hyperparameters.get("DATASET_SCHEMA")
 
+    if dataset_schema is None:
+        raise RuntimeError(
+            "[ERROR] DATASET_SCHEMA not found in model hyperparameters. "
+            "This model was likely trained with an older pipeline."
+        )
+    
+    INPUT_BAND_INDICES = dataset_schema["INPUT_BAND_INDICES"]
+    
+    
     # Retrieve hyperparameter values from the JSON file
     DATA_MEAN = np.array(hyperparameters['data_mean'])
     DATA_STD = np.array(hyperparameters['data_std'])
@@ -551,13 +562,17 @@ def process_single_image(dataset_classify, version, region,folder_temp):
 
     # Convert GDAL dataset to a NumPy array
     log_message(f"[INFO] Converting GDAL dataset to NumPy array.")
-    data_classify = convert_to_array(dataset_classify)    
-    data_classify = data_classify[:, :, :NUM_INPUT]
+    data_classify = convert_to_array(dataset_classify)
+    data_classify = data_classify[:, :, INPUT_BAND_INDICES]
 
   
     # Reshape into a single pixel vector
     log_message(f"[INFO] Reshaping data into a single pixel vector.")
     data_classify_vector = reshape_single_vector(data_classify)
+    log_message(
+        f"[INFO] Using input bands indices from model: {INPUT_BAND_INDICES} "
+        f"(total={len(INPUT_BAND_INDICES)})"
+    )
     # print('data_classify_vector',data_classify_vector)
     # Normalize the input vector using data_mean and data_std
     # log_message(f"[INFO] Normalizing the input vector using data_mean and data_std.")
@@ -565,6 +580,11 @@ def process_single_image(dataset_classify, version, region,folder_temp):
 
     # Perform the classification using the model
     log_message(f"[INFO] Running classification using the model.")
+    if data_classify_vector.shape[1] != hyperparameters["NUM_INPUT"]:
+    raise RuntimeError(
+        f"[ERROR] Band mismatch: model expects {hyperparameters['NUM_INPUT']} bands, "
+        f"but classification data has {data_classify_vector.shape[1]}"
+    )
     output_data_classified = classify(data_classify_vector, model_file_local_temp, hyperparameters)
     
     # Reshape the classified data back into image format
