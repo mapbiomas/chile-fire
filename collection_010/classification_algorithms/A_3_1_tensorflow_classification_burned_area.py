@@ -26,6 +26,9 @@ import pyproj
 import shutil  # For file and folder operations
 import json
 import subprocess
+
+LOCAL_BASE_FOLDER = f"/content/{BASE_DATASET_PATH}"
+
 # ====================================
 # 🧰 SUPPORT FUNCTIONS (utils)
 # ====================================
@@ -509,7 +512,8 @@ def process_single_image(dataset_classify, version, region,folder_temp):
     - Filtered classified image.
     """
     # Path to the remote model in Google Cloud Storage (with wildcards)
-    gcs_model_file = f'gs://{bucket_name}/sudamerica/{country}/models_col1/col1_{country}_{version}_{region}_rnn_lstm_ckpt*'
+    gcs_model_file = f'gs://{BASE_DATASET_PATH}/models_col1/col1_{country}_{version}_{region}_rnn_lstm_ckpt*'
+
     # Local path for the model files
     model_file_local_temp = f'{folder_temp}/col1_{country}_{version}_{region}_rnn_lstm_ckpt'
 
@@ -577,7 +581,7 @@ def process_year_by_satellite(satellite_years, bucket_name, folder_mosaic, folde
     grid_landsat = grid.getInfo()['features']
     start_time = time.time()
 
-    collection_name = f'projects/{ee_project}/assets/FIRE/COLLECTION1/CLASSIFICATION/burned_area_{country}_{version}'
+    collection_name = f'projects/{ee_project}/assets/FIRE/COLLECTION1/CLASSIFICATION/{DATASET_VERSION or "root"}/burned_area_{country}_{version}'
     check_or_create_collection(collection_name, ee_project)
 
     for satellite_year in satellite_years[:1 if simulate_test else None]:  # apenas 1 satélite se teste
@@ -588,10 +592,10 @@ def process_year_by_satellite(satellite_years, bucket_name, folder_mosaic, folde
             for year in years:
                 test_tag = "_test" if simulate_test else ""
                 image_name = f"burned_area_{country}_{satellite}_{version}_region{region[1:]}_{year}{suffix}{test_tag}"
-                gcs_filename = f'gs://{bucket_name}/sudamerica/{country}/result_classified/{image_name}.tif'
+                gcs_filename = f'gs://{BASE_DATASET_PATH}/result_classified/{image_name}.tif'
 
                 local_cog_path = f'{folder_mosaic}/{satellite}_{country}_{region}_{year}_cog.tif'
-                gcs_cog_path = f'gs://{bucket_name}/sudamerica/{country}/mosaics_col1_cog/{satellite}_{country}_{region}_{year}_cog.tif'
+                gcs_cog_path = f'gs://{BASE_DATASET_PATH}/mosaics_col1_cog/{satellite}_{country}_{region}_{year}_cog.tif'
 
                 if not os.path.exists(local_cog_path):
                     log_message(f"[INFO] Downloading COG from GCS: {gcs_cog_path}")
@@ -705,9 +709,9 @@ def render_classify_models(models_to_classify, simulate_test=False):
         version = parts[2]
         region = parts[3]
         # Define directories
-        folder = f'/content/mapbiomas-fire/sudamerica/{country}'
-        folder_temp = f'{folder}/tmp1'
-        folder_mosaic = f'{folder}/mosaics_cog'
+        #
+        folder_temp   = f'{LOCAL_BASE_FOLDER}/tmp1'
+        folder_mosaic = f'{LOCAL_BASE_FOLDER}/mosaics_cog'
         
         log_message(f"[INFO] Starting the classification process for country: {country}.")
         
