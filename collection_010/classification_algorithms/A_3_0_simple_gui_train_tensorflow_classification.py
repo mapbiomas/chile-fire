@@ -61,7 +61,6 @@ import gcsfs
 
 # Configuration for Google Cloud Storage
 bucket_name = 'mapbiomas-fire'
-base_folder = 'mapbiomas-fire/sudamerica/'
 
 # Initialize the Google Cloud Storage file system
 fs = gcsfs.GCSFileSystem(project=bucket_name)
@@ -74,7 +73,7 @@ class ModelRepository:
     def __init__(self, bucket_name, country):
         self.bucket = bucket_name
         self.country = country
-        self.base_folder = f'mapbiomas-fire/sudamerica/{country}'
+        self.base_folder = BASE_DATASET_PATH        
         self.fs = gcsfs.GCSFileSystem(project=bucket_name)
 
     def list_models(self):
