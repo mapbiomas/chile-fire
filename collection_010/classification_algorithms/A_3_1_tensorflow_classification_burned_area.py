@@ -1,4 +1,4 @@
-# last_update: '2026/01/27', github:'mapbiomas/chile-fire', source: 'IPAM', contact: 'contato@mapbiomas.org'
+# last_update: '2025/06/02', github:'mapbiomas/chile-fire', source: 'IPAM', contact: 'contato@mapbiomas.org'
 # MapBiomas Fire Classification Algorithms Step A_3_1_tensorflow_classification_burned_area.py 
 ### Step A_3_1 - Functions for TensorFlow classification of burned areas
 
@@ -581,10 +581,10 @@ def process_single_image(dataset_classify, version, region,folder_temp):
     # Perform the classification using the model
     log_message(f"[INFO] Running classification using the model.")
     if data_classify_vector.shape[1] != hyperparameters["NUM_INPUT"]:
-    raise RuntimeError(
-        f"[ERROR] Band mismatch: model expects {hyperparameters['NUM_INPUT']} bands, "
-        f"but classification data has {data_classify_vector.shape[1]}"
-    )
+      raise RuntimeError(
+          f"[ERROR] Band mismatch: model expects {hyperparameters['NUM_INPUT']} bands, "
+          f"but classification data has {data_classify_vector.shape[1]}"
+      )
     output_data_classified = classify(data_classify_vector, model_file_local_temp, hyperparameters)
     
     # Reshape the classified data back into image format
