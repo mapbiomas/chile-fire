@@ -1,6 +1,6 @@
 # ==========================================
 # A_2_1_training_tensorflow_model_per_region.py
-# TensorFlow 2.x rewrite – faithful to original
+# TensorFlow 2.x – Added overwrite control
 # ==========================================
 
 import os
@@ -28,7 +28,7 @@ METRICS_FILE = "training_metrics.json"
 # Model builder
 # -----------------------------
 def build_model(input_shape, num_classes=2):
-    """Builds a simple fully connected network (same architecture as TF1 version)."""
+    """Builds a simple fully connected network."""
     model = models.Sequential([
         layers.Input(shape=input_shape),
         layers.Dense(256, activation="relu"),
@@ -69,25 +69,39 @@ def save_metrics(save_dir, history):
 
 
 # -----------------------------
-# Training function (per region)
+# Training function per region
 # -----------------------------
 def train_model_for_region(region_id, x_train, y_train, x_val=None, y_val=None,
-                           country="BRA", bucket_name=None):
+                           country="BRA", bucket_name=None, overwrite=False):
     """Trains, saves and uploads a model for a specific region."""
     start_time = time.time()
     log.log_message(f"🧠 Starting training for region {region_id}", stage="training")
     log.resources()
 
     try:
+        # Setup paths
+        save_dir = os.path.join(MODEL_ROOT_DIR, country, f"region_{region_id}")
+        os.makedirs(save_dir, exist_ok=True)
+        model_path = os.path.join(save_dir, "final_model.h5")
+
+        # Handle existing model
+        if os.path.exists(model_path):
+            if overwrite:
+                log.log_message(f"⚠️ Existing model detected for region {region_id}. Overwriting...", stage="training")
+                for file in os.listdir(save_dir):
+                    os.remove(os.path.join(save_dir, file))
+            else:
+                log.log_message(f"⏭️ Model already exists for region {region_id}. Skipping training.", stage="training")
+                return  # Skip training
+
+        # Build and train
         input_shape = (x_train.shape[1],)
         model = build_model(input_shape=input_shape)
         log.log_message(f"Model built successfully for region {region_id}", stage="training")
 
-        # Define callbacks
+        # Callbacks
         early_stop = callbacks.EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
-        checkpoint_dir = os.path.join(MODEL_ROOT_DIR, country, f"region_{region_id}")
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        checkpoint_path = os.path.join(checkpoint_dir, "best_model.h5")
+        checkpoint_path = os.path.join(save_dir, "best_model.h5")
         checkpoint_cb = callbacks.ModelCheckpoint(checkpoint_path, save_best_only=True, monitor="val_loss")
 
         # Train model
@@ -104,14 +118,13 @@ def train_model_for_region(region_id, x_train, y_train, x_val=None, y_val=None,
         log.log_message(f"✅ Training completed for region {region_id} in {duration_min} min", stage="training")
 
         # Save model and metrics
-        model_path = os.path.join(checkpoint_dir, "final_model.h5")
         model.save(model_path)
-        save_metrics(checkpoint_dir, history)
+        save_metrics(save_dir, history)
 
-        # Upload if bucket provided
+        # Upload results
         if bucket_name:
             upload_to_gcs(bucket_name, model_path, f"{country}/region_{region_id}/final_model.h5")
-            upload_to_gcs(bucket_name, os.path.join(checkpoint_dir, METRICS_FILE),
+            upload_to_gcs(bucket_name, os.path.join(save_dir, METRICS_FILE),
                           f"{country}/region_{region_id}/{METRICS_FILE}")
 
     except Exception as e:
@@ -128,7 +141,7 @@ def train_model_for_region(region_id, x_train, y_train, x_val=None, y_val=None,
 # -----------------------------
 # Multi-region orchestrator
 # -----------------------------
-def run_training(regions_data, country="BRA", bucket_name=None):
+def run_training(regions_data, country="BRA", bucket_name=None, overwrite=False):
     """
     Runs training for multiple regions sequentially.
     regions_data: dict {region_id: (x_train, y_train, x_val, y_val)}
@@ -142,24 +155,10 @@ def run_training(regions_data, country="BRA", bucket_name=None):
                 x_val, y_val = None, None
             else:
                 x_train, y_train, x_val, y_val = data
-            train_model_for_region(region_id, x_train, y_train, x_val, y_val, country, bucket_name)
+            train_model_for_region(region_id, x_train, y_train, x_val, y_val,
+                                   country=country, bucket_name=bucket_name, overwrite=overwrite)
         except Exception as e:
             log.log_message(f"⚠️ Training failed for region {region_id}: {e}", stage="training", level="error")
 
     log.log_message("✅ All regional training tasks completed", stage="training")
     log.summary("completed")
-
-
-# -----------------------------
-# Test entry point
-# -----------------------------
-if __name__ == "__main__":
-    x_train = np.random.rand(500, 10)
-    y_train = np.random.randint(0, 2, 500)
-
-    regions_data = {
-        "r01": (x_train, y_train),
-        "r02": (x_train, y_train)
-    }
-
-    run_training(regions_data, country="BRA", bucket_name=None)
