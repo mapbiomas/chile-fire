@@ -41,9 +41,22 @@ def build_interface():
     else:
         gcs_models_path = f"gs://{bucket_name}/{base_dataset_path}/models_col1/"
 
-    # Available regions (adjust as needed)
-    available_regions = ["r01", "r02", "r03", "r04", "r05", "r06"]
+    # --- Detect available regions dynamically from GCS samples ---
+    samples_path = f"gs://{bucket_name}/{base_dataset_path}/samples/"
+    sample_files = list_gcs_files(samples_path)
 
+    available_regions = sorted(set([
+        f.split("_r")[-1][:2]  # detecta r01, r12 etc
+        for f in sample_files
+        if "_r" in f
+    ]))
+
+    available_regions = [f"r{r}" if not r.startswith("r") else r for r in available_regions]
+
+    if not available_regions:
+        log.log_message("⚠️ No region samples detected — training GUI will not start.", stage="gui", level="warning")
+        print("⚠️ No available regions detected in GCS samples folder.")
+        return
     # Detect models directly from GCS
     bucket_files = list_gcs_files(gcs_models_path)
     trained_regions_v2 = []  # TFv2 (.h5)
