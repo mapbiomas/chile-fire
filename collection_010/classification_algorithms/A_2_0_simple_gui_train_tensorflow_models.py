@@ -1,10 +1,10 @@
 # ==========================================
 # A_2_0_simple_gui_train_tensorflow_models.py
-# TensorFlow 2.x – Training GUI with model detection (TFv1 vs TFv2)
+# TensorFlow 2.x – Training GUI with GCS-based model detection
 # ==========================================
 
 import os
-import glob
+import subprocess
 import numpy as np
 import ipywidgets as widgets
 from IPython.display import display
@@ -12,56 +12,61 @@ from A_0_2_log_algorithm_monitor import log
 from A_2_1_training_tensorflow_model_per_region import run_training
 
 
+def list_gcs_files(bucket_path):
+    """Return list of file paths from a GCS bucket directory."""
+    try:
+        result = subprocess.run(["gsutil", "ls", bucket_path], capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.splitlines()
+        else:
+            return []
+    except Exception as e:
+        log.log_message(f"⚠️ Could not list GCS files: {e}", stage="gui", level="warning")
+        return []
+
+
 def build_interface():
-    """
-    Creates the interactive GUI for selecting and training models.
-    - Detects existing models (both legacy TFv1 and new TFv2 formats)
-    - Warns about potential overwrites
-    - Keeps full compatibility with the MapBiomas Fire notebook structure
-    """
+    """Builds the interactive training interface with automatic GCS model detection."""
 
     from IPython import get_ipython
     global_vars = get_ipython().user_ns
 
-    # Retrieve global parameters (set earlier in A_0_1)
+    # Retrieve variables defined earlier in A_0_1
     country = global_vars.get("country", "unknown")
     base_dataset_path = global_vars.get("BASE_DATASET_PATH", "")
     bucket_name = global_vars.get("bucket_name", None)
 
-    # Example regions — replace with dynamic list if available
+    # Example regions (replace with dynamic list if available)
     available_regions = ["r01", "r02", "r03", "r04", "r05"]
 
-    # Detect trained models (both formats)
-    trained_regions_v2 = []  # New TFv2 models (.h5)
-    trained_regions_v1 = []  # Legacy TFv1 models (.ckpt)
-    model_dir = os.path.join(base_dataset_path, "models_col1")
+    # List files in the GCS models folder
+    gcs_models_path = f"gs://{bucket_name}/sudamerica/{country}/models_col1/"
+    bucket_files = list_gcs_files(gcs_models_path)
+
+    trained_regions_v2 = []  # TFv2 (.h5)
+    trained_regions_v1 = []  # TFv1 (.ckpt)
 
     for region in available_regions:
-        # Patterns for legacy TFv1 and current TFv2
-        tfv1_patterns = glob.glob(os.path.join(model_dir, f"*_{country}_*_{region}_rnn_lstm_ckpt.*"))
-        tfv2_patterns = glob.glob(os.path.join(model_dir, f"*{region}*model_final.h5"))
-
-        if tfv2_patterns:
-            trained_regions_v2.append(region)
-        elif tfv1_patterns:
+        # Detect TFv1 legacy models
+        if any(f"_{region}_rnn_lstm_ckpt" in f for f in bucket_files):
             trained_regions_v1.append(region)
+        # Detect TFv2 new models
+        elif any(f"{region}" in f and "model_final.h5" in f for f in bucket_files):
+            trained_regions_v2.append(region)
 
-    # Build region checkboxes with emoji labels
+    # Build region checkboxes
     region_checkboxes = []
     for region in available_regions:
         if region in trained_regions_v2:
-            label = f"⚠️ {region}"  # Trained (compatible)
+            label = f"⚠️ {region}"  # compatible model
         elif region in trained_regions_v1:
-            label = f"⚡ {region}"  # Legacy TFv1 model
+            label = f"⚡ {region}"  # legacy TFv1 model
         else:
             label = region
         region_checkboxes.append(widgets.Checkbox(value=False, description=label))
 
-    # Input field for model version (preserved)
-    version_text = widgets.Text(
-        value="v1",
-        description="Version:"
-    )
+    # Input for version (optional)
+    version_text = widgets.Text(value="v1", description="Version:")
 
     # Train button
     train_button = widgets.Button(
@@ -70,28 +75,28 @@ def build_interface():
         icon="rocket"
     )
 
-    # Output area for logs
+    # Output area
     output_area = widgets.Output()
 
-    # Informative legend for users
-    overwrite_info = widgets.HTML(
+    # Compact information banner
+    info_text = widgets.HTML(
         "<p style='font-size:13px;'>"
-        "<span style='color:#b58900;'>⚠️</span> Regions marked with this symbol already have a <b>compatible trained model</b>. "
-        "Running training on them will <b>overwrite</b> the existing models.<br>"
-        "<span style='color:#cb4b16;'>⚡</span> Regions marked with this symbol contain <b>legacy TensorFlow v1 models</b> "
-        "that are <b>not compatible</b> with the current training format. Retraining will create a new version."
+        "<span style='color:#b58900;'>⚠️</span> Existing compatible model — will overwrite.<br>"
+        "<span style='color:#cb4b16;'>⚡</span> Legacy TFv1 model — retraining will replace it."
         "</p>"
     )
 
     # ----------------------------------
-    # Callback executed when "Train Models" is clicked
+    # Button callback
     # ----------------------------------
     def train_models_click(b):
         with output_area:
             output_area.clear_output()
 
             version = version_text.value.strip()
-            selected_regions = [cb.description.replace("⚠️ ", "").replace("⚡ ", "") for cb in region_checkboxes if cb.value]
+            selected_regions = [
+                cb.description.replace("⚠️ ", "").replace("⚡ ", "") for cb in region_checkboxes if cb.value
+            ]
 
             if not selected_regions:
                 print("⚠️ Please select at least one region to train.")
@@ -103,16 +108,15 @@ def build_interface():
             log.log_message(f"Version: {version}", stage="gui")
             log.log_message(f"Regions selected: {selected_regions}", stage="gui")
 
-            # Detect special statuses
             overwrite_regions = [r for r in selected_regions if r in trained_regions_v2]
             legacy_regions = [r for r in selected_regions if r in trained_regions_v1]
 
             if overwrite_regions:
-                log.log_message(f"⚠️ These regions already have compatible models and will be overwritten: {overwrite_regions}", stage="gui")
+                log.log_message(f"⚠️ Overwriting existing compatible models: {overwrite_regions}", stage="gui")
             if legacy_regions:
-                log.log_message(f"⚡ These regions have legacy TFv1 models and will be retrained from scratch: {legacy_regions}", stage="gui")
+                log.log_message(f"⚡ Retraining legacy TFv1 models: {legacy_regions}", stage="gui")
 
-            # Simulated training data (replace with actual data loading)
+            # Simulated sample data (replace with real training data)
             regions_data = {}
             for region in selected_regions:
                 x_train = np.random.rand(500, 10)
@@ -132,17 +136,17 @@ def build_interface():
                 log.log_message(f"❌ Error during training: {e}", stage="gui", level="error")
                 print("An error occurred:", e)
 
-    # Bind callback
+    # Connect button to callback
     train_button.on_click(train_models_click)
 
-    # Compose the GUI layout
+    # Layout
     region_box = widgets.VBox(region_checkboxes)
     display(
         widgets.VBox([
             version_text,
             widgets.HTML("<b>Select regions for training:</b>"),
             region_box,
-            overwrite_info,
+            info_text,
             train_button,
             output_area
         ])
@@ -150,15 +154,13 @@ def build_interface():
 
 
 def launch_training_gui():
-    """Initialize the GUI (entry point for A_2_0)."""
+    """Initializes the GUI."""
     log.log_message("🧩 Building training GUI (A_2_0)", stage="gui")
     build_interface()
     log.log_message("✅ GUI ready – waiting for user to click 'Train Models'", stage="gui")
 
 
-# ----------------------------------
-# Auto-detect environment (Colab/Jupyter)
-# ----------------------------------
+# Auto-detect Jupyter/Colab
 try:
     from IPython import get_ipython
     if get_ipython() is not None:
