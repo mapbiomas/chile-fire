@@ -1,13 +1,28 @@
 # ==========================================
 # A_2_0_simple_gui_train_tensorflow_models.py
-# TensorFlow 2.x – Dynamic GUI for training, consistent with original structure
+# TensorFlow 2.x – Dynamic GUI for training, consistent with original pipeline
 # ==========================================
 
+# --- Handle imports safely for Colab runtime resets ---
 import os
+import sys
 import subprocess
 import numpy as np
 import ipywidgets as widgets
 from IPython.display import display
+
+try:
+    from IPython import get_ipython
+    ipy = get_ipython()
+    if ipy is not None and "country" in ipy.user_ns:
+        country = ipy.user_ns["country"]
+        algorithms = f"/content/{country}-fire/collection_010/classification_algorithms"
+        if algorithms not in sys.path:
+            sys.path.append(algorithms)
+except Exception:
+    pass
+
+# --- Local imports (now work even after reset) ---
 from A_0_2_log_algorithm_monitor import log
 from A_2_1_training_tensorflow_model_per_region import run_training
 
@@ -30,7 +45,7 @@ def build_interface():
     from IPython import get_ipython
     global_vars = get_ipython().user_ns
 
-    # Retrieve parameters from previous steps (defined in notebook)
+    # Retrieve parameters defined in the notebook
     country = global_vars.get("country", "unknown")
     base_dataset_path = global_vars.get("BASE_DATASET_PATH", "")
     bucket_name = global_vars.get("bucket_name", "mapbiomas-fire")
@@ -40,7 +55,7 @@ def build_interface():
     sample_files = list_gcs_files(samples_path)
 
     available_regions = sorted(set([
-        f.split("_r")[-1][:2]  # detecta r01, r02, etc
+        f.split("_r")[-1][:2]  # detect r01, r02, etc.
         for f in sample_files
         if "_r" in f
     ]))
@@ -51,7 +66,7 @@ def build_interface():
         print("⚠️ No available regions detected in GCS samples folder.")
         return
 
-    # --- Detect models from models_col1 folder ---
+    # --- Detect existing models from models_col1 folder ---
     models_path = f"gs://{base_dataset_path}/models_col1/"
     model_files = list_gcs_files(models_path)
 
@@ -80,7 +95,7 @@ def build_interface():
         elif tfv1_match:
             trained_regions_v1.append(region)
 
-    # --- Build GUI components ---
+    # --- Build the GUI ---
     region_checkboxes = []
     for region in available_regions:
         if region in trained_regions_v2:
@@ -95,7 +110,7 @@ def build_interface():
     train_button = widgets.Button(description="Train Models", button_style="success", icon="rocket")
     output_area = widgets.Output()
 
-    # legend compact on one line
+    # compact legend
     info_text = widgets.HTML(
         "<p style='font-size:13px;'>"
         "<span style='color:#b58900;'>⚠️</span> Overwrites existing model. "
@@ -133,7 +148,7 @@ def build_interface():
             if legacy_regions:
                 log.log_message(f"⚡ Retraining TFv1 models: {legacy_regions}", stage="gui")
 
-            # Placeholder data — in production your loader replaces this
+            # Placeholder data (your real loader replaces this)
             regions_data = {}
             for region in selected_regions:
                 x_train = np.random.rand(500, 10)
@@ -176,7 +191,7 @@ def launch_training_gui():
     log.log_message("✅ GUI ready – waiting for user to click 'Train Models'", stage="gui")
 
 
-# Auto-detect Jupyter/Colab
+# --- Auto-detect Jupyter/Colab ---
 try:
     from IPython import get_ipython
     if get_ipython() is not None:
