@@ -1,24 +1,28 @@
 # ==========================================
 # A_3_1_tensorflow_classification_burned_area.py
-# TensorFlow 2.x – burned area classification and GCS export
-# Works with GUI selections defined in A_3_0
+# TensorFlow 2.x – Burned Area Classification
+# Compatible with vector-based (RNN/MLP) models
 # ==========================================
 
 import os
 import sys
 import time
-import subprocess
+import json
 import numpy as np
-import rasterio
-from rasterio.windows import Window
 import tensorflow as tf
+import rasterio
+from rasterio.transform import from_origin
+import subprocess
 from datetime import datetime
-from scipy.ndimage import binary_dilation, binary_erosion
+import logging
 
-# Enable eager mode for tf.data pipelines
+# Silence absl/tf warnings
+logging.getLogger("absl").setLevel(logging.ERROR)
+
+# --- ensure eager execution for tf.data pipelines ---
 tf.data.experimental.enable_debug_mode()
 
-# --- Safe import path handling for Colab runtime resets ---
+# --- Safe import path handling ---
 try:
     from IPython import get_ipython
     ipy = get_ipython()
@@ -37,153 +41,140 @@ from A_0_2_log_algorithm_monitor import log
 # ==========================================================
 # Utility functions
 # ==========================================================
-def ensure_dir(path):
-    """Create directory if not exists."""
-    os.makedirs(path, exist_ok=True)
+def list_gcs_files(bucket_path):
+    """List all files in a GCS folder using gsutil."""
+    try:
+        result = subprocess.run(["gsutil", "ls", bucket_path], capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.splitlines()
+        return []
+    except Exception as e:
+        log.log_message(f"⚠️ Could not list GCS files: {e}", stage="classify", level="warning")
+        return []
+
+
+def load_mosaic_from_gcs(gcs_path, local_tmp="temp_mosaic.tif"):
+    """Download mosaic from GCS and return local path."""
+    try:
+        subprocess.run(["gsutil", "cp", gcs_path, local_tmp], check=True)
+        return local_tmp
+    except subprocess.CalledProcessError as e:
+        log.log_message(f"❌ Failed to download mosaic {gcs_path}: {e}", stage="classify", level="error")
+        return None
 
 
 def upload_to_gcs(local_path, gcs_path):
-    """Upload file to Google Cloud Storage."""
+    """Upload a file to GCS."""
     try:
         subprocess.run(["gsutil", "-m", "cp", local_path, gcs_path], check=True)
-        log.log_message(f"📤 Uploaded: {gcs_path}", stage="classification")
+        log.log_message(f"📤 Uploaded classified raster to {gcs_path}", stage="classify")
     except subprocess.CalledProcessError as e:
-        log.log_message(f"⚠️ Upload failed: {e}", stage="classification", level="error")
-
-
-def load_model_compatible(model_name, base_dataset_path):
-    """Load either TF2 (.h5) or legacy TF1 (.ckpt) model."""
-    gcs_model_path = f"gs://{base_dataset_path}/models_col1/{model_name}.h5"
-    local_model_path = f"./models_col1/{model_name}.h5"
-
-    # Try downloading model file
-    ensure_dir("./models_col1")
-    subprocess.run(["gsutil", "cp", gcs_model_path, local_model_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    if os.path.exists(local_model_path):
-        model = tf.keras.models.load_model(local_model_path)
-        log.log_message(f"🧠 Loaded TF2 model: {model_name}", stage="classification")
-        return model
-
-    # Try TFv1 legacy checkpoint
-    ckpt_prefix = f"gs://{base_dataset_path}/models_col1/{model_name}_ckpt"
-    local_ckpt_prefix = f"./models_col1/{model_name}_ckpt"
-
-    subprocess.run(["gsutil", "-m", "cp", f"{ckpt_prefix}.*", "./models_col1/"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if os.path.exists(f"{local_ckpt_prefix}.index"):
-        log.log_message(f"⚡ Loaded legacy TFv1 model: {model_name}", stage="classification")
-        model = tf.compat.v1.keras.models.load_model(local_ckpt_prefix)
-        return model
-
-    raise FileNotFoundError(f"Model not found: {model_name}")
-
-
-def classify_mosaic(model, mosaic_path, output_path, smooth_kernel=3, simulate_test=False):
-    """Perform inference on mosaic and save classified TIFF."""
-
-    with rasterio.open(mosaic_path) as src:
-        profile = src.profile.copy()
-        if simulate_test:
-            width, height = min(256, src.width), min(256, src.height)
-            window = Window(0, 0, width, height)
-            image = src.read(window=window).astype(np.float32)
-            log.log_message(f"🔍 Simulation mode active (subset {width}x{height})", stage="classification")
-        else:
-            image = src.read().astype(np.float32)
-
-    # Normalize and reshape
-    image = np.transpose(image, (1, 2, 0))  # (H, W, bands)
-    image = np.nan_to_num(image)
-    image = (image - np.mean(image)) / (np.std(image) + 1e-6)
-
-    # Predict in blocks
-    block_size = 256
-    height, width, _ = image.shape
-    output = np.zeros((height, width), dtype=np.uint8)
-
-    for y in range(0, height, block_size):
-        for x in range(0, width, block_size):
-            block = image[y:y+block_size, x:x+block_size]
-            if block.size == 0:
-                continue
-            input_data = np.expand_dims(block, axis=0)
-            preds = model.predict(input_data, verbose=0)
-            preds = np.argmax(preds, axis=-1)[0]
-            output[y:y+preds.shape[0], x:x+preds.shape[1]] = preds.astype(np.uint8)
-
-    # Postprocess
-    output = binary_dilation(output, iterations=smooth_kernel)
-    output = binary_erosion(output, iterations=smooth_kernel)
-
-    # Save GeoTIFF
-    ensure_dir(os.path.dirname(output_path))
-    profile.update(dtype=rasterio.uint8, count=1, compress="LZW")
-
-    with rasterio.open(output_path, "w", **profile) as dst:
-        dst.write(output, 1)
-
-    log.log_message(f"💾 Saved classified mosaic: {output_path}", stage="classification")
+        log.log_message(f"❌ Failed to upload result: {e}", stage="classify", level="error")
 
 
 # ==========================================================
-# Main execution function
+# Classification logic
 # ==========================================================
-def execute_burned_area_classification(simulate_test=False):
-    """Main classification execution function (called manually)."""
-
+def execute_burned_area_classification():
+    """Executes burned area classification using selected models and mosaics."""
     from IPython import get_ipython
     global_vars = get_ipython().user_ns
 
-    selected_models = global_vars.get("SELECTED_MODELS", [])
-    selected_mosaics = global_vars.get("SELECTED_MOSAICS", [])
-    version = global_vars.get("CLASSIFICATION_VERSION", "v1")
     country = global_vars.get("country", "unknown")
     base_dataset_path = global_vars.get("BASE_DATASET_PATH", "")
     bucket_name = global_vars.get("bucket_name", "mapbiomas-fire")
+    selected_models = global_vars.get("SELECTED_MODELS", [])
+    selected_mosaics = global_vars.get("SELECTED_MOSAICS", [])
+    version = global_vars.get("CLASSIFICATION_VERSION", "v1")
 
     if not selected_models or not selected_mosaics:
-        print("⚠️ No models or mosaics selected. Please run A_3_0 first.")
+        print("⚠️ No models or mosaics selected. Please select them in the interface first.")
         return
 
-    log.log_message("🚀 Starting burned area classification", stage="classification")
-    log.log_message(f"Country: {country}", stage="classification")
-    log.log_message(f"Version: {version}", stage="classification")
-    log.log_message(f"Models: {selected_models}", stage="classification")
-    log.log_message(f"Mosaics: {selected_mosaics}", stage="classification")
+    log.log_message("🚀 Starting burned area classification", stage="classify")
+    log.log_message(f"Country: {country}", stage="classify")
+    log.log_message(f"Version: {version}", stage="classify")
+    log.log_message(f"Models: {selected_models}", stage="classify")
+    log.log_message(f"Mosaics: {selected_mosaics}", stage="classify")
 
+    models_path = f"gs://{base_dataset_path}/models_col1/"
+    mosaics_path = f"gs://{base_dataset_path}/mosaics_col1_cog/"
+    output_path = f"gs://{base_dataset_path}/result_classified/"
+
+    # ======================================================
     for model_name in selected_models:
+        model_file = f"{models_path}{model_name}.h5"
+        local_model = f"{model_name}.h5"
+
         try:
-            model = load_model_compatible(model_name, base_dataset_path)
-
-            for mosaic_name in selected_mosaics:
-                log.log_message(f"🧩 Classifying {mosaic_name} with model {model_name}", stage="classification")
-
-                gcs_mosaic_path = f"gs://{base_dataset_path}/mosaics_col1_cog/{mosaic_name}.tif"
-                local_mosaic_path = f"./mosaics/{mosaic_name}.tif"
-                ensure_dir("./mosaics")
-
-                subprocess.run(["gsutil", "cp", gcs_mosaic_path, local_mosaic_path],
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-                output_local = f"./classified/{model_name}_{mosaic_name}_classified.tif"
-                classify_mosaic(model, local_mosaic_path, output_local, simulate_test=simulate_test)
-
-                gcs_output_path = f"gs://{base_dataset_path}/result_classified/{model_name}_{mosaic_name}_classified.tif"
-                upload_to_gcs(output_local, gcs_output_path)
-
+            subprocess.run(["gsutil", "cp", model_file, local_model], check=True)
+            model = tf.keras.models.load_model(local_model, compile=False)
+            log.log_message(f"🧠 Loaded TF2 model: {model_name}", stage="classify")
         except Exception as e:
-            log.log_message(f"❌ Error in model {model_name}: {e}", stage="classification", level="error")
+            log.log_message(f"❌ Could not load model {model_name}: {e}", stage="classify", level="error")
+            continue
 
-    log.log_message("✅ Burned area classification completed", stage="classification")
+        # Determine region ID (e.g., r2) to match mosaics
+        region_id = None
+        parts = model_name.split("_")
+        for p in parts:
+            if p.startswith("r") and p[1:].isdigit():
+                region_id = p
+                break
+
+        mosaics_for_model = [m for m in selected_mosaics if region_id and region_id in m]
+
+        for mosaic_name in mosaics_for_model:
+            log.log_message(f"🧩 Classifying {mosaic_name} with model {model_name}", stage="classify")
+            gcs_mosaic = f"{mosaics_path}{mosaic_name}.tif"
+            local_mosaic = load_mosaic_from_gcs(gcs_mosaic, f"{mosaic_name}.tif")
+            if not local_mosaic:
+                continue
+
+            try:
+                with rasterio.open(local_mosaic) as src:
+                    img = src.read().astype(np.float32)
+                    transform = src.transform
+                    profile = src.profile
+
+                # (bands, height, width) -> (height*width, bands)
+                img = np.transpose(img, (1, 2, 0))
+                n_rows, n_cols, n_bands = img.shape
+                flat_pixels = img.reshape(-1, n_bands)
+
+                # Normalize
+                flat_pixels = np.nan_to_num(flat_pixels)
+                flat_pixels = (flat_pixels - np.min(flat_pixels, axis=0)) / (
+                    np.max(flat_pixels, axis=0) - np.min(flat_pixels, axis=0) + 1e-6
+                )
+
+                # Predict in batches
+                batch_size = 4096
+                preds = []
+                for i in range(0, len(flat_pixels), batch_size):
+                    batch = flat_pixels[i:i + batch_size]
+                    y_pred = model.predict(batch, verbose=0)
+                    if y_pred.ndim > 1:
+                        y_pred = np.argmax(y_pred, axis=1)
+                    preds.extend(y_pred)
+
+                preds = np.array(preds).reshape(n_rows, n_cols).astype(np.uint8)
+
+                # Save output raster
+                out_file = f"classified_{mosaic_name}.tif"
+                profile.update(dtype=rasterio.uint8, count=1)
+                with rasterio.open(out_file, "w", **profile) as dst:
+                    dst.write(preds, 1)
+
+                # Upload result
+                gcs_out = f"{output_path}{out_file}"
+                upload_to_gcs(out_file, gcs_out)
+
+                log.log_message(f"✅ Classified {mosaic_name} successfully", stage="classify")
+
+            except Exception as e:
+                log.log_message(f"❌ Error in model {model_name}: {e}", stage="classify", level="error")
+
+    log.log_message("✅ Burned area classification completed", stage="classify")
+    log.summary("completed")
     print("✅ Classification completed successfully.")
-
-
-# ==========================================================
-# Optional test trigger
-# ==========================================================
-try:
-    from IPython import get_ipython
-    if get_ipython() is not None:
-        log.log_message("🔹 Module A_3_1 ready — use execute_burned_area_classification()", stage="classification")
-except Exception:
-    pass
