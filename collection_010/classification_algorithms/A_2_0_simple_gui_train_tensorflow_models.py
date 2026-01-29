@@ -77,7 +77,7 @@ def build_interface():
     samples_path = f"gs://{base_dataset_path}/training_samples/"
     sample_files = list_gcs_files(samples_path)
     available_models = extract_model_prefixes(sample_files, country)
-    available_models = sorted(set(available_models)) 
+    available_models = sorted(set(available_models))
 
     if not available_models:
         log.log_message("⚠️ No region samples detected — training GUI will not start.", stage="gui", level="warning")
@@ -93,12 +93,14 @@ def build_interface():
 
     for model_prefix in available_models:
         v2_match = any(
-            f"{model_prefix}" in f and (f.endswith(".h5") or f.endswith(".keras"))
+            model_prefix in f and (f.endswith(".h5") or f.endswith(".keras"))
             for f in model_files
         )
         v1_match = any(
-            f"{model_prefix}" in f and (
-                f.endswith(".ckpt.index") or f.endswith(".ckpt.meta") or f.endswith(".ckpt.data-00000-of-00001")
+            model_prefix in f and (
+                f.endswith(".ckpt.index")
+                or f.endswith(".ckpt.meta")
+                or f.endswith(".ckpt.data-00000-of-00001")
             )
             for f in model_files
         )
@@ -107,26 +109,27 @@ def build_interface():
         elif v1_match:
             trained_v1.append(model_prefix)
 
-    # --- Build GUI checkboxes ---
+    # --- Build GUI checkboxes with flags ---
     region_checkboxes = []
     for model_prefix in available_models:
         if model_prefix in trained_v2:
-            label = f"⚠️ {model_prefix}"
+            label = f"✅ {model_prefix}"  # TFv2 (already trained)
         elif model_prefix in trained_v1:
-            label = f"⚡ {model_prefix}"
+            label = f"⚡ {model_prefix}"  # TFv1 legacy
         else:
-            label = model_prefix
+            label = f"🆕 {model_prefix}"  # new model
         region_checkboxes.append(widgets.Checkbox(value=False, description=label))
 
     version_text = widgets.Text(value="v1", description="Version:")
     train_button = widgets.Button(description="Train Models", button_style="success", icon="rocket")
     output_area = widgets.Output()
 
-    # Compact legend
+    # --- Compact legend ---
     info_text = widgets.HTML(
         "<p style='font-size:13px;'>"
-        "<span style='color:#b58900;'>⚠️</span> Overwrites existing model. "
-        "<span style='color:#cb4b16; margin-left:15px;'>⚡</span> Legacy TFv1 — retraining creates new model."
+        "<span>✅ TFv2 trained</span> &nbsp;|&nbsp; "
+        "<span>⚡ Legacy TFv1 (retraining creates new model)</span> &nbsp;|&nbsp; "
+        "<span>🆕 New model to train</span>"
         "</p>"
     )
 
@@ -137,7 +140,7 @@ def build_interface():
 
             version = version_text.value.strip()
             selected_models = [
-                cb.description.replace("⚠️ ", "").replace("⚡ ", "")
+                cb.description.replace("✅ ", "").replace("⚡ ", "").replace("🆕 ", "")
                 for cb in region_checkboxes
                 if cb.value
             ]
@@ -160,7 +163,7 @@ def build_interface():
             if legacy_models:
                 log.log_message(f"⚡ Retraining TFv1 models: {legacy_models}", stage="gui")
 
-            # Placeholder dummy data
+            # Dummy data for demonstration
             regions_data = {}
             for model_name in selected_models:
                 x_train = np.random.rand(500, 10)
@@ -182,7 +185,7 @@ def build_interface():
 
     train_button.on_click(train_models_click)
 
-    # Layout
+    # --- Layout ---
     region_box = widgets.VBox(region_checkboxes)
     display(
         widgets.VBox([
