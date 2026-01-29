@@ -70,14 +70,14 @@ path_html = widgets.HTML(value="")
 
 dirs_select = widgets.Select(
     options=[],
-    description="Pastas:",
+    description="Folders:",
     rows=14,
     layout=widgets.Layout(width="380px")
 )
 
 files_select = widgets.Select(
     options=[],
-    description="Arquivos:",
+    description="Files:",
     rows=14,
     layout=widgets.Layout(width="380px")
 )
