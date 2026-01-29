@@ -1,7 +1,7 @@
 # ==========================================
 # A_2_0_simple_gui_train_tensorflow_models.py
-# TensorFlow 2.x – Dynamic GUI for training
-# Fully compatible with original pipeline
+# TensorFlow 2.x – GUI for model training
+# Fully aligned with bucket naming conventions
 # ==========================================
 
 import os
@@ -11,7 +11,7 @@ import numpy as np
 import ipywidgets as widgets
 from IPython.display import display
 
-# --- Handle imports safely for Colab runtime resets ---
+# --- Safe import path handling for Colab runtime resets ---
 try:
     from IPython import get_ipython
     ipy = get_ipython()
@@ -40,79 +40,89 @@ def list_gcs_files(bucket_path):
         return []
 
 
+def extract_model_prefixes(sample_files, country):
+    """
+    Extracts region/model identifiers based on real training sample file names.
+    Example:
+    samples_fire_v1_l78_chile_r5_valdivian_temperate_forest_2016.tif
+    -> col1_chile_v1_r5_rnn_lstm_ckpt
+    """
+    model_prefixes = set()
+    for f in sample_files:
+        base = os.path.basename(f)
+        if base.startswith("samples_fire_") and base.endswith(".tif"):
+            parts = base.split("_")
+            try:
+                version = parts[2]  # e.g., v1, v2, v3...
+                region = [p for p in parts if p.startswith("r") and p[1:].isdigit()][0]
+                prefix = f"col1_{country}_{version}_{region}_rnn_lstm_ckpt"
+                model_prefixes.add(prefix)
+            except Exception:
+                continue
+    return sorted(model_prefixes)
+
+
 def build_interface():
-    """Builds the GUI for TensorFlow model training based on available training samples."""
+    """Builds the GUI for TensorFlow model training based on available samples."""
 
     from IPython import get_ipython
     global_vars = get_ipython().user_ns
 
-    # Retrieve notebook variables
+    # Retrieve parameters defined in the notebook
     country = global_vars.get("country", "unknown")
     base_dataset_path = global_vars.get("BASE_DATASET_PATH", "")
     bucket_name = global_vars.get("bucket_name", "mapbiomas-fire")
 
-    # --- Detect available regions from training_samples/ folder ---
+    # --- Detect available model prefixes from training samples ---
     samples_path = f"gs://{base_dataset_path}/training_samples/"
     sample_files = list_gcs_files(samples_path)
+    available_models = extract_model_prefixes(sample_files, country)
+    available_models = sorted(set(available_models)) 
 
-    available_regions = sorted(set([
-        f.split("_r")[-1].split("_")[0]  # detect region number after "_r"
-        for f in sample_files
-        if "_r" in f and f.endswith(".tif")
-    ]))
-
-    available_regions = [f"r{r.zfill(2)}" for r in available_regions if r.isdigit()]
-
-    if not available_regions:
+    if not available_models:
         log.log_message("⚠️ No region samples detected — training GUI will not start.", stage="gui", level="warning")
         print("⚠️ No available regions detected in GCS training_samples folder.")
         return
 
-    # --- Detect existing models from models_col1/ folder ---
+    # --- Detect existing models in GCS ---
     models_path = f"gs://{base_dataset_path}/models_col1/"
     model_files = list_gcs_files(models_path)
 
-    trained_regions_v2 = []  # TFv2 (.keras or .h5)
-    trained_regions_v1 = []  # TFv1 (.ckpt/.meta/.index)
+    trained_v2 = []  # TFv2 (.keras/.h5)
+    trained_v1 = []  # TFv1 (.ckpt/.meta/.index)
 
-    for region in available_regions:
-        region_short = region.lstrip("r0")
-
-        tfv1_match = any(
-            f"col1_{country}_" in f and (
-                f"_r{region_short}_" in f or f"_{region}_"
-            ) and "rnn_lstm_ckpt" in f
+    for model_prefix in available_models:
+        v2_match = any(
+            f"{model_prefix}" in f and (f.endswith(".h5") or f.endswith(".keras"))
             for f in model_files
         )
-
-        tfv2_match = any(
-            f"col1_{country}_" in f and (
-                f"_r{region_short}_" in f or f"_{region}_"
-            ) and (f.endswith("model_final.h5") or f.endswith("final_model.keras"))
+        v1_match = any(
+            f"{model_prefix}" in f and (
+                f.endswith(".ckpt.index") or f.endswith(".ckpt.meta") or f.endswith(".ckpt.data-00000-of-00001")
+            )
             for f in model_files
         )
+        if v2_match:
+            trained_v2.append(model_prefix)
+        elif v1_match:
+            trained_v1.append(model_prefix)
 
-        if tfv2_match:
-            trained_regions_v2.append(region)
-        elif tfv1_match:
-            trained_regions_v1.append(region)
-
-    # --- Build the GUI ---
+    # --- Build GUI checkboxes ---
     region_checkboxes = []
-    for region in available_regions:
-        if region in trained_regions_v2:
-            label = f"⚠️ {region}"
-        elif region in trained_regions_v1:
-            label = f"⚡ {region}"
+    for model_prefix in available_models:
+        if model_prefix in trained_v2:
+            label = f"⚠️ {model_prefix}"
+        elif model_prefix in trained_v1:
+            label = f"⚡ {model_prefix}"
         else:
-            label = region
+            label = model_prefix
         region_checkboxes.append(widgets.Checkbox(value=False, description=label))
 
     version_text = widgets.Text(value="v1", description="Version:")
     train_button = widgets.Button(description="Train Models", button_style="success", icon="rocket")
     output_area = widgets.Output()
 
-    # compact legend (same line)
+    # Compact legend
     info_text = widgets.HTML(
         "<p style='font-size:13px;'>"
         "<span style='color:#b58900;'>⚠️</span> Overwrites existing model. "
@@ -126,36 +136,36 @@ def build_interface():
             output_area.clear_output()
 
             version = version_text.value.strip()
-            selected_regions = [
+            selected_models = [
                 cb.description.replace("⚠️ ", "").replace("⚡ ", "")
                 for cb in region_checkboxes
                 if cb.value
             ]
 
-            if not selected_regions:
-                print("⚠️ Please select at least one region to train.")
+            if not selected_models:
+                print("⚠️ Please select at least one model to train.")
                 return
 
             log.log_message("🚀 Training manually triggered via GUI", stage="gui")
             log.log_message(f"Country: {country}", stage="gui")
             log.log_message(f"Base dataset path: {base_dataset_path}", stage="gui")
             log.log_message(f"Version: {version}", stage="gui")
-            log.log_message(f"Selected regions: {selected_regions}", stage="gui")
+            log.log_message(f"Selected models: {selected_models}", stage="gui")
 
-            overwrite_regions = [r for r in selected_regions if r in trained_regions_v2]
-            legacy_regions = [r for r in selected_regions if r in trained_regions_v1]
+            overwrite_models = [m for m in selected_models if m in trained_v2]
+            legacy_models = [m for m in selected_models if m in trained_v1]
 
-            if overwrite_regions:
-                log.log_message(f"⚠️ Overwriting TFv2 models: {overwrite_regions}", stage="gui")
-            if legacy_regions:
-                log.log_message(f"⚡ Retraining TFv1 models: {legacy_regions}", stage="gui")
+            if overwrite_models:
+                log.log_message(f"⚠️ Overwriting TFv2 models: {overwrite_models}", stage="gui")
+            if legacy_models:
+                log.log_message(f"⚡ Retraining TFv1 models: {legacy_models}", stage="gui")
 
-            # Placeholder data (your real loader replaces this)
+            # Placeholder dummy data
             regions_data = {}
-            for region in selected_regions:
+            for model_name in selected_models:
                 x_train = np.random.rand(500, 10)
                 y_train = np.random.randint(0, 2, 500)
-                regions_data[region] = (x_train, y_train)
+                regions_data[model_name] = (x_train, y_train)
 
             try:
                 run_training(
@@ -177,7 +187,7 @@ def build_interface():
     display(
         widgets.VBox([
             version_text,
-            widgets.HTML("<b>Select regions for training:</b>"),
+            widgets.HTML("<b>Select models for training:</b>"),
             region_box,
             info_text,
             train_button,
