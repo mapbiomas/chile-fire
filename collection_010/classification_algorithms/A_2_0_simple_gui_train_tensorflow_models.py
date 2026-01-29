@@ -1,9 +1,9 @@
 # ==========================================
 # A_2_0_simple_gui_train_tensorflow_models.py
-# TensorFlow 2.x – Dynamic GUI for training, consistent with original pipeline
+# TensorFlow 2.x – Dynamic GUI for training
+# Fully compatible with original pipeline
 # ==========================================
 
-# --- Handle imports safely for Colab runtime resets ---
 import os
 import sys
 import subprocess
@@ -11,6 +11,7 @@ import numpy as np
 import ipywidgets as widgets
 from IPython.display import display
 
+# --- Handle imports safely for Colab runtime resets ---
 try:
     from IPython import get_ipython
     ipy = get_ipython()
@@ -22,7 +23,7 @@ try:
 except Exception:
     pass
 
-# --- Local imports (now work even after reset) ---
+# --- Local imports ---
 from A_0_2_log_algorithm_monitor import log
 from A_2_1_training_tensorflow_model_per_region import run_training
 
@@ -40,38 +41,39 @@ def list_gcs_files(bucket_path):
 
 
 def build_interface():
-    """Builds the GUI for TensorFlow model training based on available sample regions."""
+    """Builds the GUI for TensorFlow model training based on available training samples."""
 
     from IPython import get_ipython
     global_vars = get_ipython().user_ns
 
-    # Retrieve parameters defined in the notebook
+    # Retrieve notebook variables
     country = global_vars.get("country", "unknown")
     base_dataset_path = global_vars.get("BASE_DATASET_PATH", "")
     bucket_name = global_vars.get("bucket_name", "mapbiomas-fire")
 
-    # --- Detect available regions from samples ---
-    samples_path = f"gs://{base_dataset_path}/samples/"
+    # --- Detect available regions from training_samples/ folder ---
+    samples_path = f"gs://{base_dataset_path}/training_samples/"
     sample_files = list_gcs_files(samples_path)
 
     available_regions = sorted(set([
-        f.split("_r")[-1][:2]  # detect r01, r02, etc.
+        f.split("_r")[-1].split("_")[0]  # detect region number after "_r"
         for f in sample_files
-        if "_r" in f
+        if "_r" in f and f.endswith(".tif")
     ]))
-    available_regions = [f"r{r}" if not r.startswith("r") else r for r in available_regions]
+
+    available_regions = [f"r{r.zfill(2)}" for r in available_regions if r.isdigit()]
 
     if not available_regions:
         log.log_message("⚠️ No region samples detected — training GUI will not start.", stage="gui", level="warning")
-        print("⚠️ No available regions detected in GCS samples folder.")
+        print("⚠️ No available regions detected in GCS training_samples folder.")
         return
 
-    # --- Detect existing models from models_col1 folder ---
+    # --- Detect existing models from models_col1/ folder ---
     models_path = f"gs://{base_dataset_path}/models_col1/"
     model_files = list_gcs_files(models_path)
 
-    trained_regions_v2 = []  # TFv2 (.h5)
-    trained_regions_v1 = []  # TFv1 (.ckpt, .meta, .index)
+    trained_regions_v2 = []  # TFv2 (.keras or .h5)
+    trained_regions_v1 = []  # TFv1 (.ckpt/.meta/.index)
 
     for region in available_regions:
         region_short = region.lstrip("r0")
@@ -86,7 +88,7 @@ def build_interface():
         tfv2_match = any(
             f"col1_{country}_" in f and (
                 f"_r{region_short}_" in f or f"_{region}_"
-            ) and f.endswith("model_final.h5")
+            ) and (f.endswith("model_final.h5") or f.endswith("final_model.keras"))
             for f in model_files
         )
 
@@ -110,7 +112,7 @@ def build_interface():
     train_button = widgets.Button(description="Train Models", button_style="success", icon="rocket")
     output_area = widgets.Output()
 
-    # compact legend
+    # compact legend (same line)
     info_text = widgets.HTML(
         "<p style='font-size:13px;'>"
         "<span style='color:#b58900;'>⚠️</span> Overwrites existing model. "
