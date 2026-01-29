@@ -17,26 +17,26 @@ from IPython.display import display, clear_output
 # ----------------------------
 fs = gcsfs.GCSFileSystem(project=bucket_name)
 
-base_folder = "mapbiomas-fire/sudamerica/"  # seu "root" de países
+base_folder = "mapbiomas-fire/sudamerica/"  # your country "root"
 
 def _ensure_dir(path: str) -> str:
     return path if path.endswith("/") else path + "/"
 
 def _basename(name: str) -> str:
-    # name vem tipo: "mapbiomas-fire/sudamerica/ARG/" ou ".../arquivo.tif"
+    # name comes like: "mapbiomas-fire/sudamerica/ARG/" or ".../file.tif"
     name = name[:-1] if name.endswith("/") else name
     return name.split("/")[-1]
 
 def list_countries(base_folder: str):
     fs.invalidate_cache()
     items = fs.ls(_ensure_dir(base_folder), detail=True)
-    # Em alguns buckets, países são diretórios; filtramos por type
+    # In some buckets, countries are directories; we filter by type
     countries = sorted([_basename(i["name"]) for i in items if i.get("type") == "directory"])
     return countries
 
 def list_dir(path: str):
     """
-    Retorna (dirs, files) do path atual, como listas de nomes (apenas o último componente).
+    Returns (dirs, files) from the current path as lists of names (last component only).
     """
     fs.invalidate_cache()
     items = fs.ls(_ensure_dir(path), detail=True)
@@ -64,7 +64,7 @@ dropdown_countries = widgets.Dropdown(
 )
 
 btn_up = widgets.Button(description="↑ Back", layout=widgets.Layout(width="110px"))
-btn_refresh = widgets.Button(description="⟳ Update", layout=widgets.Layout(width="130px"))
+btn_refresh = widgets.Button(description="⟳ Refresh", layout=widgets.Layout(width="130px"))
 
 path_html = widgets.HTML(value="")
 
@@ -84,7 +84,7 @@ files_select = widgets.Select(
 
 details_out = widgets.Output(layout={"border": "1px solid #999", "padding": "8px", "width": "780px"})
 
-# Estado de navegação
+# Navigation State
 root_path = None
 current_path = None
 _suppress_events = True
@@ -104,15 +104,15 @@ def render():
         dirs, files = [], []
         with details_out:
             clear_output()
-            print("Erro ao listar diretório:", e)
+            print("Error listing directory:", e)
 
-    # BLOQUEIA callbacks enquanto atualiza a UI
+    # BLOCK callbacks while updating the UI
     _suppress_events = True
     try:
         dirs_select.options = dirs
         files_select.options = files
 
-        # Impede auto-seleção do primeiro item (e portanto impede entrar sozinho)
+        # Prevents auto-selection of the first item (stops auto-entering folders)
         dirs_select.index = None
         files_select.index = None
     finally:
@@ -123,19 +123,19 @@ def render():
 
 def set_country(country: str):
     """
-    Define o root da navegação como a pasta do país e entra nela.
+    Sets the navigation root to the country folder and enters it.
     """
     global root_path, current_path
     root_path = _ensure_dir(f"{base_folder}{country}")
     current_path = root_path
     with details_out:
         clear_output()
-        print(f"Selecionado: {country}")
+        print(f"Selected: {country}")
     render()
 
 def go_up(_=None):
     """
-    Sobe um nível (até root_path).
+    Goes up one level (up to root_path).
     """
     global current_path, root_path
     if current_path is None or root_path is None:
@@ -143,11 +143,11 @@ def go_up(_=None):
     if current_path == root_path:
         return
 
-    # Remove barra final e sobe
+    # Remove trailing slash and move up
     p = current_path[:-1] if current_path.endswith("/") else current_path
     parent = "/".join(p.split("/")[:-1]) + "/"
 
-    # Não permitir subir acima do root
+    # Do not allow going above root
     if len(parent) < len(root_path) or not parent.startswith(root_path):
         current_path = root_path
     else:
@@ -155,7 +155,7 @@ def go_up(_=None):
 
     with details_out:
         clear_output()
-        print("Voltando para:", current_path)
+        print("Returning to:", current_path)
     render()
 
 def enter_dir(change):
@@ -170,7 +170,7 @@ def enter_dir(change):
     current_path = _ensure_dir(f"{current_path}{folder}")
     with details_out:
         clear_output()
-        print("Entrando em:", current_path)
+        print("Entering:", current_path)
     render()
 
 
@@ -186,21 +186,21 @@ def show_file_details(change):
     full_path = f"{current_path}{filename}"
     with details_out:
         clear_output()
-        print("Arquivo selecionado:")
+        print("Selected file:")
         print(full_path)
         try:
             info = fs.info(full_path)
-            print("\nMetadados:")
+            print("\nMetadata:")
             for k in ["size", "updated", "timeCreated", "crc32c", "md5Hash", "contentType"]:
                 if k in info:
                     print(f"- {k}: {info[k]}")
         except Exception:
-            print("\n(Não foi possível obter metadados via fs.info)")
+            print("\n(Could not retrieve metadata via fs.info)")
 
 def refresh(_=None):
     with details_out:
         clear_output()
-        print("Atualizando listagem...")
+        print("Refreshing list...")
     render()
 
 # ----------------------------
@@ -221,6 +221,6 @@ ui = VBox([top_bar, path_html, lists, details_out])
 
 display(ui)
 
-# Inicializa no primeiro país, se existir
+# Initialize on the first country, if any
 if dropdown_countries.options:
     set_country(dropdown_countries.value)
