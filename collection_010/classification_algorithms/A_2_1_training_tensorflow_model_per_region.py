@@ -1,166 +1,151 @@
 # ==========================================
 # A_2_1_training_tensorflow_model_per_region.py
-# TensorFlow 2.x – Compatible rewrite (MapBiomas Fire pipeline)
+# TensorFlow 2.x – Training per region with logging, compatible with original pipeline
 # ==========================================
 
+# --- Handle imports safely for Colab runtime resets ---
 import os
-import gc
+import sys
 import json
 import time
+import subprocess
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras import layers, models, optimizers, callbacks
+
+try:
+    from IPython import get_ipython
+    ipy = get_ipython()
+    if ipy is not None and "country" in ipy.user_ns:
+        country = ipy.user_ns["country"]
+        algorithms = f"/content/{country}-fire/collection_010/classification_algorithms"
+        if algorithms not in sys.path:
+            sys.path.append(algorithms)
+except Exception:
+    pass
+
+# --- Local imports (work even after reset) ---
 from A_0_2_log_algorithm_monitor import log
-from google.cloud import storage
 
 
-# -----------------------------
-# Global training configuration
-# -----------------------------
-EPOCHS = 50
-BATCH_SIZE = 128
-LEARNING_RATE = 0.001
-MODEL_NAME = "model_final.h5"
-METRICS_FILE = "training_metrics.json"
-
-
-# -----------------------------
-# Helper: build model
-# -----------------------------
-def build_model(input_shape, num_classes=2):
-    """Builds a simple feedforward network for burned area classification."""
-    model = models.Sequential([
-        layers.Input(shape=input_shape),
-        layers.Dense(256, activation="relu"),
-        layers.Dropout(0.4),
-        layers.Dense(128, activation="relu"),
-        layers.Dense(num_classes, activation="softmax")
+def build_model(input_shape):
+    """Builds a simple LSTM model (same as original)."""
+    model = tf.keras.Sequential([
+        tf.keras.layers.InputLayer(input_shape=input_shape),
+        tf.keras.layers.LSTM(64, return_sequences=True),
+        tf.keras.layers.LSTM(32),
+        tf.keras.layers.Dense(32, activation='relu'),
+        tf.keras.layers.Dense(1, activation='sigmoid')
     ])
-    optimizer = optimizers.Adam(learning_rate=LEARNING_RATE)
-    model.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
     return model
 
 
-# -----------------------------
-# Helper: upload file to GCS
-# -----------------------------
-def upload_to_gcs(bucket_name, local_path, gcs_path):
-    """Uploads a local file to Google Cloud Storage."""
-    try:
-        client = storage.Client()
-        bucket = client.bucket(bucket_name)
-        blob = bucket.blob(gcs_path)
-        blob.upload_from_filename(local_path)
-        log.log_message(f"☁️ Uploaded {local_path} → gs://{bucket_name}/{gcs_path}", stage="upload")
-    except Exception as e:
-        log.log_message(f"⚠️ Upload failed for {local_path}: {e}", stage="upload", level="error")
+def run_training(regions_data, country, bucket_name, base_dataset_path, overwrite=True):
+    """
+    Trains TensorFlow models for each region, uploads results to GCS,
+    and logs progress using A_0_2_log_algorithm_monitor.
+    """
 
+    log.log_message("🚀 Starting model training process", stage="training")
 
-# -----------------------------
-# Helper: save metrics to JSON
-# -----------------------------
-def save_metrics(save_dir, history):
-    """Saves loss/accuracy metrics to JSON."""
-    metrics = {k: [float(v) for v in vals] for k, vals in history.history.items()}
-    metrics_path = os.path.join(save_dir, METRICS_FILE)
-    with open(metrics_path, "w") as f:
-        json.dump(metrics, f, indent=2)
-    log.log_message(f"📊 Metrics saved at {metrics_path}", stage="training")
+    if not regions_data:
+        log.log_message("⚠️ No training data provided. Exiting.", stage="training", level="warning")
+        return
 
+    os.makedirs("./models", exist_ok=True)
+    local_model_dir = f"./models/{country}"
+    os.makedirs(local_model_dir, exist_ok=True)
 
-# -----------------------------
-# Training function per region
-# -----------------------------
-def train_model_for_region(region_id, x_train, y_train,
-                           country, base_dataset_path, bucket_name,
-                           overwrite=False):
-    """Trains and saves a TensorFlow model for a given region."""
-    start_time = time.time()
-    log.log_message(f"🧠 Starting training for region {region_id}", stage="training")
-    log.resources()
+    start_time_all = time.time()
 
-    try:
-        # Define save directory (compatible with original structure)
-        save_dir = os.path.join(base_dataset_path, "models_col1")
-        os.makedirs(save_dir, exist_ok=True)
-        model_path = os.path.join(save_dir, MODEL_NAME)
-        metrics_path = os.path.join(save_dir, METRICS_FILE)
+    for region, (x_train, y_train) in regions_data.items():
+        start_time = time.time()
+        region_label = region.replace("r", "region_")
 
-        # Handle existing model
-        if os.path.exists(model_path):
-            if overwrite:
-                log.log_message(f"⚠️ Existing model found. Overwriting...", stage="training")
-                os.remove(model_path)
-                if os.path.exists(metrics_path):
-                    os.remove(metrics_path)
-            else:
-                log.log_message(f"⏭️ Model already exists. Skipping training (overwrite=False).", stage="training")
-                return
+        log.log_message(f"🧠 Starting training for region {region}", stage="training")
+        log.resources()
 
-        # Build and train
-        input_shape = (x_train.shape[1],)
-        model = build_model(input_shape=input_shape)
-        log.log_message("✅ Model built successfully", stage="training")
+        # --- Model building ---
+        model = build_model((x_train.shape[1], 1))
+        model.summary(print_fn=lambda x: log.log_message(x, stage="training"))
 
-        # Callbacks
-        early_stop = callbacks.EarlyStopping(monitor="loss", patience=10, restore_best_weights=True)
-        checkpoint_cb = callbacks.ModelCheckpoint(model_path, save_best_only=True, monitor="loss")
+        # --- Reshape input if needed ---
+        if len(x_train.shape) == 2:
+            x_train = np.expand_dims(x_train, axis=-1)
 
-        # Train model
-        history = model.fit(
-            x_train, y_train,
-            epochs=EPOCHS,
-            batch_size=BATCH_SIZE,
-            callbacks=[early_stop, checkpoint_cb],
-            verbose=1
+        # --- Training parameters ---
+        EPOCHS = 50
+        BATCH_SIZE = 64
+        EARLY_STOPPING = tf.keras.callbacks.EarlyStopping(
+            monitor='val_loss', patience=10, restore_best_weights=True
         )
 
-        duration_min = round((time.time() - start_time) / 60, 2)
-        log.log_message(f"✅ Training completed for region {region_id} in {duration_min} min", stage="training")
+        # --- Train model ---
+        history = model.fit(
+            x_train, y_train,
+            validation_split=0.2,
+            epochs=EPOCHS,
+            batch_size=BATCH_SIZE,
+            verbose=1,
+            callbacks=[EARLY_STOPPING]
+        )
 
-        # Save final model and metrics
-        model.save(model_path)
-        save_metrics(save_dir, history)
+        # --- Save model locally ---
+        local_region_dir = os.path.join(local_model_dir, region_label)
+        os.makedirs(local_region_dir, exist_ok=True)
 
-        # Upload to GCS (same structure as original pipeline)
-        if bucket_name:
-            relative_path = f"{base_dataset_path}/models_col1"
-            upload_to_gcs(bucket_name, model_path, f"{relative_path}/{MODEL_NAME}")
-            upload_to_gcs(bucket_name, metrics_path, f"{relative_path}/{METRICS_FILE}")
+        model_file = os.path.join(local_region_dir, "final_model.keras")
+        model.save(model_file)
 
-    except Exception as e:
-        log.log_message(f"❌ Error during training for region {region_id}: {e}", stage="training", level="error")
-        raise
+        # --- Save training metrics ---
+        metrics = {
+            "region": region,
+            "epochs": len(history.history['loss']),
+            "final_loss": float(history.history['loss'][-1]),
+            "final_accuracy": float(history.history['accuracy'][-1]),
+            "duration_min": round((time.time() - start_time) / 60, 2),
+        }
 
-    finally:
-        tf.keras.backend.clear_session()
-        gc.collect()
-        log.resources()
-        log.log_message(f"🏁 Training session cleared for region {region_id}", stage="training")
+        metrics_file = os.path.join(local_region_dir, "training_metrics.json")
+        with open(metrics_file, "w") as f:
+            json.dump(metrics, f, indent=4)
 
+        log.log_message(f"✅ Training completed for region {region} in {metrics['duration_min']} min", stage="training")
 
-# -----------------------------
-# Orchestrator for multi-region
-# -----------------------------
-def run_training(regions_data, country, bucket_name, base_dataset_path, overwrite=False):
-    """
-    Trains models for all selected regions sequentially.
-    regions_data: dict {region_id: (x_train, y_train)}
-    """
-    log.log_message(f"🚀 Starting model training for {len(regions_data)} regions", stage="training")
+        # --- Upload to GCS ---
+        gcs_model_path = f"gs://{base_dataset_path}/models_col1/{region_label}/final_model.keras"
+        gcs_metrics_path = f"gs://{base_dataset_path}/models_col1/{region_label}/training_metrics.json"
 
-    for region_id, data in regions_data.items():
         try:
-            x_train, y_train = data
-            train_model_for_region(
-                region_id, x_train, y_train,
-                country=country,
-                base_dataset_path=base_dataset_path,
-                bucket_name=bucket_name,
-                overwrite=overwrite
-            )
-        except Exception as e:
-            log.log_message(f"⚠️ Training failed for region {region_id}: {e}", stage="training", level="error")
+            subprocess.run(["gsutil", "cp", model_file, gcs_model_path], check=True)
+            log.log_message(f"☁️ Uploaded {model_file} → {gcs_model_path}", stage="training")
 
-    log.log_message("✅ All regional training tasks completed", stage="training")
+            subprocess.run(["gsutil", "cp", metrics_file, gcs_metrics_path], check=True)
+            log.log_message(f"☁️ Uploaded {metrics_file} → {gcs_metrics_path}", stage="training")
+        except subprocess.CalledProcessError as e:
+            log.log_message(f"❌ Error uploading to GCS: {e}", stage="training", level="error")
+
+        log.resources()
+        log.log_message(f"🏁 Training session cleared for region {region}", stage="training")
+
+        # --- Cleanup for memory safety ---
+        tf.keras.backend.clear_session()
+        del model, x_train, y_train, history
+
+    # --- Final summary ---
+    total_duration = round((time.time() - start_time_all) / 60, 2)
     log.summary("completed")
+    log.log_message(f"✅ All regional training tasks completed in {total_duration} min", stage="training")
+
+
+# --- Safe direct execution in Jupyter/Colab ---
+try:
+    from IPython import get_ipython
+    if get_ipython() is not None:
+        log.log_message("🔹 Module A_2_1 ready for use via GUI", stage="training")
+except Exception:
+    pass
