@@ -1,6 +1,6 @@
 # ==========================================
 # A_2_0_simple_gui_train_tensorflow_models.py
-# TensorFlow 2.x – GUI with correct GCS model detection (r01 <-> r1)
+# TensorFlow 2.x – Dynamic GUI for training, consistent with original structure
 # ==========================================
 
 import os
@@ -25,57 +25,54 @@ def list_gcs_files(bucket_path):
 
 
 def build_interface():
-    """Builds the GUI for TensorFlow model training and marks regions based on bucket contents."""
+    """Builds the GUI for TensorFlow model training based on available sample regions."""
 
     from IPython import get_ipython
     global_vars = get_ipython().user_ns
 
-    # Retrieve global vars
+    # Retrieve parameters from previous steps (defined in notebook)
     country = global_vars.get("country", "unknown")
     base_dataset_path = global_vars.get("BASE_DATASET_PATH", "")
     bucket_name = global_vars.get("bucket_name", "mapbiomas-fire")
 
-    # Define bucket path (avoid duplication)
-    if base_dataset_path.startswith(bucket_name):
-        gcs_models_path = f"gs://{base_dataset_path}/models_col1/"
-    else:
-        gcs_models_path = f"gs://{bucket_name}/{base_dataset_path}/models_col1/"
-
-    # --- Detect available regions dynamically from GCS samples ---
-    samples_path = f"gs://{bucket_name}/{base_dataset_path}/samples/"
+    # --- Detect available regions from samples ---
+    samples_path = f"gs://{base_dataset_path}/samples/"
     sample_files = list_gcs_files(samples_path)
 
     available_regions = sorted(set([
-        f.split("_r")[-1][:2]  # detecta r01, r12 etc
+        f.split("_r")[-1][:2]  # detecta r01, r02, etc
         for f in sample_files
         if "_r" in f
     ]))
-
     available_regions = [f"r{r}" if not r.startswith("r") else r for r in available_regions]
 
     if not available_regions:
         log.log_message("⚠️ No region samples detected — training GUI will not start.", stage="gui", level="warning")
         print("⚠️ No available regions detected in GCS samples folder.")
         return
-    # Detect models directly from GCS
-    bucket_files = list_gcs_files(gcs_models_path)
+
+    # --- Detect models from models_col1 folder ---
+    models_path = f"gs://{base_dataset_path}/models_col1/"
+    model_files = list_gcs_files(models_path)
+
     trained_regions_v2 = []  # TFv2 (.h5)
     trained_regions_v1 = []  # TFv1 (.ckpt, .meta, .index)
 
     for region in available_regions:
-        region_short = region.lstrip("r0")  # r01 → 1
+        region_short = region.lstrip("r0")
+
         tfv1_match = any(
             f"col1_{country}_" in f and (
                 f"_r{region_short}_" in f or f"_{region}_"
             ) and "rnn_lstm_ckpt" in f
-            for f in bucket_files
+            for f in model_files
         )
 
         tfv2_match = any(
             f"col1_{country}_" in f and (
                 f"_r{region_short}_" in f or f"_{region}_"
             ) and f.endswith("model_final.h5")
-            for f in bucket_files
+            for f in model_files
         )
 
         if tfv2_match:
@@ -83,7 +80,7 @@ def build_interface():
         elif tfv1_match:
             trained_regions_v1.append(region)
 
-    # Build checkboxes
+    # --- Build GUI components ---
     region_checkboxes = []
     for region in available_regions:
         if region in trained_regions_v2:
@@ -98,13 +95,14 @@ def build_interface():
     train_button = widgets.Button(description="Train Models", button_style="success", icon="rocket")
     output_area = widgets.Output()
 
+    # legend compact on one line
     info_text = widgets.HTML(
         "<p style='font-size:13px;'>"
         "<span style='color:#b58900;'>⚠️</span> Overwrites existing model. "
         "<span style='color:#cb4b16; margin-left:15px;'>⚡</span> Legacy TFv1 — retraining creates new model."
         "</p>"
     )
-    
+
     # ----------------------------------
     def train_models_click(b):
         with output_area:
@@ -135,7 +133,7 @@ def build_interface():
             if legacy_regions:
                 log.log_message(f"⚡ Retraining TFv1 models: {legacy_regions}", stage="gui")
 
-            # Placeholder example data
+            # Placeholder data — in production your loader replaces this
             regions_data = {}
             for region in selected_regions:
                 x_train = np.random.rand(500, 10)
