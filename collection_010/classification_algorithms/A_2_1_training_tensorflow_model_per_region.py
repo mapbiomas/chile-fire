@@ -1,6 +1,6 @@
 # ==========================================
 # A_2_1_training_tensorflow_model_per_region.py
-# TensorFlow 2.x – Added overwrite control
+# TensorFlow 2.x – Compatible rewrite (MapBiomas Fire pipeline)
 # ==========================================
 
 import os
@@ -15,20 +15,20 @@ from google.cloud import storage
 
 
 # -----------------------------
-# Global configuration
+# Global training configuration
 # -----------------------------
 EPOCHS = 50
 BATCH_SIZE = 128
 LEARNING_RATE = 0.001
-MODEL_ROOT_DIR = "./models"
+MODEL_NAME = "model_final.h5"
 METRICS_FILE = "training_metrics.json"
 
 
 # -----------------------------
-# Model builder
+# Helper: build model
 # -----------------------------
 def build_model(input_shape, num_classes=2):
-    """Builds a simple fully connected network."""
+    """Builds a simple feedforward network for burned area classification."""
     model = models.Sequential([
         layers.Input(shape=input_shape),
         layers.Dense(256, activation="relu"),
@@ -42,10 +42,10 @@ def build_model(input_shape, num_classes=2):
 
 
 # -----------------------------
-# GCS upload helper
+# Helper: upload file to GCS
 # -----------------------------
 def upload_to_gcs(bucket_name, local_path, gcs_path):
-    """Uploads a file to GCS using the official client."""
+    """Uploads a local file to Google Cloud Storage."""
     try:
         client = storage.Client()
         bucket = client.bucket(bucket_name)
@@ -53,14 +53,14 @@ def upload_to_gcs(bucket_name, local_path, gcs_path):
         blob.upload_from_filename(local_path)
         log.log_message(f"☁️ Uploaded {local_path} → gs://{bucket_name}/{gcs_path}", stage="upload")
     except Exception as e:
-        log.log_message(f"⚠️ Failed to upload {local_path}: {e}", stage="upload", level="error")
+        log.log_message(f"⚠️ Upload failed for {local_path}: {e}", stage="upload", level="error")
 
 
 # -----------------------------
-# Save metrics to JSON
+# Helper: save metrics to JSON
 # -----------------------------
 def save_metrics(save_dir, history):
-    """Saves training metrics (loss, accuracy, etc.) to JSON."""
+    """Saves loss/accuracy metrics to JSON."""
     metrics = {k: [float(v) for v in vals] for k, vals in history.history.items()}
     metrics_path = os.path.join(save_dir, METRICS_FILE)
     with open(metrics_path, "w") as f:
@@ -71,43 +71,44 @@ def save_metrics(save_dir, history):
 # -----------------------------
 # Training function per region
 # -----------------------------
-def train_model_for_region(region_id, x_train, y_train, x_val=None, y_val=None,
-                           country="BRA", bucket_name=None, overwrite=False):
-    """Trains, saves and uploads a model for a specific region."""
+def train_model_for_region(region_id, x_train, y_train,
+                           country, base_dataset_path, bucket_name,
+                           overwrite=False):
+    """Trains and saves a TensorFlow model for a given region."""
     start_time = time.time()
     log.log_message(f"🧠 Starting training for region {region_id}", stage="training")
     log.resources()
 
     try:
-        # Setup paths
-        save_dir = os.path.join(MODEL_ROOT_DIR, country, f"region_{region_id}")
+        # Define save directory (compatible with original structure)
+        save_dir = os.path.join(base_dataset_path, "models_col1")
         os.makedirs(save_dir, exist_ok=True)
-        model_path = os.path.join(save_dir, "final_model.h5")
+        model_path = os.path.join(save_dir, MODEL_NAME)
+        metrics_path = os.path.join(save_dir, METRICS_FILE)
 
         # Handle existing model
         if os.path.exists(model_path):
             if overwrite:
-                log.log_message(f"⚠️ Existing model detected for region {region_id}. Overwriting...", stage="training")
-                for file in os.listdir(save_dir):
-                    os.remove(os.path.join(save_dir, file))
+                log.log_message(f"⚠️ Existing model found. Overwriting...", stage="training")
+                os.remove(model_path)
+                if os.path.exists(metrics_path):
+                    os.remove(metrics_path)
             else:
-                log.log_message(f"⏭️ Model already exists for region {region_id}. Skipping training.", stage="training")
-                return  # Skip training
+                log.log_message(f"⏭️ Model already exists. Skipping training (overwrite=False).", stage="training")
+                return
 
         # Build and train
         input_shape = (x_train.shape[1],)
         model = build_model(input_shape=input_shape)
-        log.log_message(f"Model built successfully for region {region_id}", stage="training")
+        log.log_message("✅ Model built successfully", stage="training")
 
         # Callbacks
-        early_stop = callbacks.EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
-        checkpoint_path = os.path.join(save_dir, "best_model.h5")
-        checkpoint_cb = callbacks.ModelCheckpoint(checkpoint_path, save_best_only=True, monitor="val_loss")
+        early_stop = callbacks.EarlyStopping(monitor="loss", patience=10, restore_best_weights=True)
+        checkpoint_cb = callbacks.ModelCheckpoint(model_path, save_best_only=True, monitor="loss")
 
         # Train model
         history = model.fit(
             x_train, y_train,
-            validation_data=(x_val, y_val) if x_val is not None else None,
             epochs=EPOCHS,
             batch_size=BATCH_SIZE,
             callbacks=[early_stop, checkpoint_cb],
@@ -117,15 +118,15 @@ def train_model_for_region(region_id, x_train, y_train, x_val=None, y_val=None,
         duration_min = round((time.time() - start_time) / 60, 2)
         log.log_message(f"✅ Training completed for region {region_id} in {duration_min} min", stage="training")
 
-        # Save model and metrics
+        # Save final model and metrics
         model.save(model_path)
         save_metrics(save_dir, history)
 
-        # Upload results
+        # Upload to GCS (same structure as original pipeline)
         if bucket_name:
-            upload_to_gcs(bucket_name, model_path, f"{country}/region_{region_id}/final_model.h5")
-            upload_to_gcs(bucket_name, os.path.join(save_dir, METRICS_FILE),
-                          f"{country}/region_{region_id}/{METRICS_FILE}")
+            relative_path = f"{base_dataset_path}/models_col1"
+            upload_to_gcs(bucket_name, model_path, f"{relative_path}/{MODEL_NAME}")
+            upload_to_gcs(bucket_name, metrics_path, f"{relative_path}/{METRICS_FILE}")
 
     except Exception as e:
         log.log_message(f"❌ Error during training for region {region_id}: {e}", stage="training", level="error")
@@ -139,24 +140,25 @@ def train_model_for_region(region_id, x_train, y_train, x_val=None, y_val=None,
 
 
 # -----------------------------
-# Multi-region orchestrator
+# Orchestrator for multi-region
 # -----------------------------
-def run_training(regions_data, country="BRA", bucket_name=None, overwrite=False):
+def run_training(regions_data, country, bucket_name, base_dataset_path, overwrite=False):
     """
-    Runs training for multiple regions sequentially.
-    regions_data: dict {region_id: (x_train, y_train, x_val, y_val)}
+    Trains models for all selected regions sequentially.
+    regions_data: dict {region_id: (x_train, y_train)}
     """
     log.log_message(f"🚀 Starting model training for {len(regions_data)} regions", stage="training")
 
     for region_id, data in regions_data.items():
         try:
-            if len(data) == 2:
-                x_train, y_train = data
-                x_val, y_val = None, None
-            else:
-                x_train, y_train, x_val, y_val = data
-            train_model_for_region(region_id, x_train, y_train, x_val, y_val,
-                                   country=country, bucket_name=bucket_name, overwrite=overwrite)
+            x_train, y_train = data
+            train_model_for_region(
+                region_id, x_train, y_train,
+                country=country,
+                base_dataset_path=base_dataset_path,
+                bucket_name=bucket_name,
+                overwrite=overwrite
+            )
         except Exception as e:
             log.log_message(f"⚠️ Training failed for region {region_id}: {e}", stage="training", level="error")
 
