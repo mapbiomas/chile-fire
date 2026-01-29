@@ -63,8 +63,8 @@ dropdown_countries = widgets.Dropdown(
     layout=widgets.Layout(width="360px")
 )
 
-btn_up = widgets.Button(description="↑ Voltar", layout=widgets.Layout(width="110px"))
-btn_refresh = widgets.Button(description="⟳ Atualizar", layout=widgets.Layout(width="130px"))
+btn_up = widgets.Button(description="↑ Back", layout=widgets.Layout(width="110px"))
+btn_refresh = widgets.Button(description="⟳ Update", layout=widgets.Layout(width="130px"))
 
 path_html = widgets.HTML(value="")
 
