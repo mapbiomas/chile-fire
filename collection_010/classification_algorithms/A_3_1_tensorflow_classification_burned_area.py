@@ -617,7 +617,7 @@ def process_year_by_satellite(satellite_years, bucket_name, folder_mosaic, folde
                 gcs_filename = f'gs://{BASE_DATASET_PATH}/result_classified/{image_name}.tif'
 
                 local_cog_path = f'{folder_mosaic}/{satellite}_{country}_{region}_{year}_cog.tif'
-                gcs_cog_path = f'gs://{BASE_DATASET_PATH}/mosaics_col1_cog/{satellite}_{country}_{region}_{year}_cog.tif'
+                gcs_cog_path = f'gs://{BASE_DATASET_PATH}/mosaics_cog/{satellite}_{country}_{region}_{year}_cog.tif'
 
                 if not os.path.exists(local_cog_path):
                     log_message(f"[INFO] Downloading COG from GCS: {gcs_cog_path}")
