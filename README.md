@@ -1,2 +1,12 @@
 # chile-fire
-This repository contains the scripts for mapping burned areas in Chile as part of the MapBiomas Fire Collection and Project.
+
+Short description of the Chile Fire product.
+
+## Collections
+
+### Collection 01
+- **Status**: In progress
+- **Details**: [`fire_30m_landsat/collection_01/README.md`](./fire_30m_landsat/collection_01/README.md)
+
+## Contact
+chilemapbiomas@gmail.com
